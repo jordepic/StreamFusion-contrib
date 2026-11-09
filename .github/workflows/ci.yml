@@ -11,16 +11,23 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  native-build:
+  plan:
     if: ${{ github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/ci-plan.yml
+
+  native-build:
+    needs: plan
+    if: needs.plan.outputs.tests == 'true'
     name: Shared debug native libraries
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -35,7 +42,7 @@ jobs:
         with:
           workspaces: native
           shared-key: debug-jvm
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main' }}
 
       - name: Build all debug native libraries once
         working-directory: native
@@ -62,7 +69,8 @@ jobs:
           retention-days: 7
 
   native-tests:
-    if: ${{ github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main' }}
+    needs: plan
+    if: needs.plan.outputs.tests == 'true'
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
@@ -72,6 +80,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Free disk space
+        run: python3 bin/ci-free-disk.py
+
       - uses: ./.github/actions/setup-rust
 
       # Keyed on Cargo.lock; also disables incremental compilation, which keeps the
@@ -79,7 +90,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: debug-jvm
+          save-if: false
 
       - name: Test fork result reporting
         run: python3 -m unittest discover -s bin -p test_fork_ci_status.py
@@ -107,27 +119,36 @@ jobs:
 
   java-tests:
     needs: native-build
-    name: Java tests (debug native build)${{ matrix.suffix }}${{ matrix.jdk == '11' && ' (JDK 11)' || '' }}
+    name: Runtime, connectors and formats${{ matrix.suffix }} (JDK ${{ matrix.jdk }}, shard ${{ matrix.shard }})
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
+        line: ['2.2', '1.18']
+        jdk: ['17', '11']
+        shard: [1, 2, 3]
         include:
           - line: '2.2'
             profile: ''
             suffix: ''
-            jdk: '17'
           - line: '1.18'
             profile: '-Pflink-1.18'
             suffix: ' (Flink 1.18)'
-            jdk: '17'
           - line: '2.2'
-            profile: ''
-            suffix: ''
             jdk: '11'
+            forks: 2
+            heap: '4g'
+          - line: '2.2'
+            jdk: '17'
+            forks: 4
+            heap: '2g'
           - line: '1.18'
-            profile: '-Pflink-1.18'
-            suffix: ' (Flink 1.18)'
             jdk: '11'
+            forks: 4
+            heap: '2g'
+          - line: '1.18'
+            jdk: '17'
+            forks: 4
+            heap: '2g'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
@@ -144,9 +165,10 @@ jobs:
 
       # The upstream-suite instrumentation agent is a separate JDK 17 development tool.
       - name: Test upstream execution evidence checks
-        if: matrix.jdk == '17'
+        if: matrix.jdk == '17' && matrix.shard == 1
         run: |
           python3 bin/ci-maven-dependencies.py --pom dev/flink-suite/agent/pom.xml
+          python3 bin/ci-maven-dependencies.py --artifact org.apache.maven.surefire:surefire-junit-platform:3.5.3
           mvn -B -ntp -f dev/flink-suite/agent/pom.xml package
           python3 -m unittest discover -s dev/flink-suite -p 'test_*.py'
           python3 -m unittest discover -s bin -p 'test_check_flink_suite_classpath.py'
@@ -154,11 +176,17 @@ jobs:
           python3 -m unittest discover -s bin -p 'test_check_native_tls.py'
           python3 -m unittest discover -s bin -p 'test_ci_free_disk.py'
           python3 -m unittest discover -s bin -p 'test_ci_module_groups.py'
+          python3 -m unittest discover -s bin -p 'test_ci_runtime_test_shards.py'
           python3 -m unittest discover -s bin -p 'test_ci_maven_dependencies.py'
+          python3 -m unittest discover -s bin -p 'test_ci_plan.py'
+          python3 -m unittest discover -s bin -p 'test_profile_ci.py'
+          python3 -m unittest discover -s bin -p 'test_profile_runtime_ci.py'
+          python3 -m unittest discover -s bin -p 'test_ci_jfr.py'
           python3 -m unittest discover -s bin -p 'test_package_release.py'
+          python3 -m unittest discover -s bin -p 'test_build_release.py'
 
       - name: Test Flink 1.18 native and fallback contract selection
-        if: matrix.line == '1.18' && matrix.jdk == '17'
+        if: matrix.line == '1.18' && matrix.jdk == '17' && matrix.shard == 1
         run: |
           mvn -B -ntp -f dev/flink-suite/agent/pom.xml -Dstreamfusion.flink-suite.flink-line=1.18 test
           mvn -B -ntp -f dev/flink-suite/agent/pom.xml -Dstreamfusion.flink-suite.flink-line=1.18 -Dstreamfusion.flink-suite.native-rocksdb=true test
@@ -170,33 +198,57 @@ jobs:
 
       # The Kafka decode harnesses use the hosted runner's Docker daemon.
       - name: Resolve Java dependencies before tests
-        run: python3 bin/ci-maven-dependencies.py --profile "${{ matrix.line == '1.18' && 'flink-1.18' || '' }}"
+        run: |
+          python3 bin/ci-maven-dependencies.py --profile "${{ matrix.line == '1.18' && 'flink-1.18' || '' }}"
+          python3 bin/ci-maven-dependencies.py --artifact org.apache.maven.surefire:surefire-junit-platform:3.2.5 --artifact com.google.protobuf:protobuf-java:2.5.0
+
+      - name: Compile the complete reactor and partition runtime test classes
+        run: |
+          mvn -B -ntp ${{ matrix.profile }} test -DskipTests -Dnative.build.skip=true
+          python3 bin/ci_runtime_test_shards.py \
+            --classes streamfusion-runtime/target/test-classes \
+            --suite runtime --count 3 --index ${{ matrix.shard }} \
+            --line '${{ matrix.line }}' \
+            --output "$RUNNER_TEMP/runtime-test-includes.txt"
 
       - name: Run Java test suite
-        run: mvn -B -ntp ${{ matrix.profile }} test -Dnative.build.skip=true
+        env:
+          JAVA_TOOL_OPTIONS: '-XX:TieredStopAtLevel=1'
+        run: |
+          nproc
+          free -m
+          vmstat -w 30 &
+          memory_sampler=$!
+          trap 'kill "$memory_sampler" 2>/dev/null || true' EXIT
+          mvn -B -ntp ${{ matrix.profile }} test -Dnative.build.skip=true \
+            "-Dsf.runtime.testIncludesFile=$RUNNER_TEMP/runtime-test-includes.txt" \
+            -DskipTests=${{ matrix.shard != 1 }} -Dsf.runtime.tests.skip=false \
+            -Dsf.testForks=${{ matrix.forks }} -Dsf.testReuseForks=false "-Dsf.extraJvmArgs=-Xmx${{ matrix.heap }}"
 
       - name: Verify JVM boundary defaults and optional cache on the freshly built native library
-        if: matrix.jdk == '17'
+        if: matrix.jdk == '17' && matrix.shard == 1
         run: >-
           mvn -B -ntp ${{ matrix.profile }} -pl streamfusion-runtime
           -Dnative.build.skip=true
           -Dnative.resource.directory="$GITHUB_WORKSPACE/native/target/debug"
           -Dtest=FlinkJvmAggregateSqlHarnessTest,FlinkNestedScalarSqlHarnessTest,FlinkNestedFixedBinarySqlHarnessTest,FlinkTemporalUdfSqlHarnessTest,FlinkBinaryRowHashParityTest,FlinkMapJsonJvmSqlHarnessTest,FlinkJsonJvmSqlHarnessTest,NativeParityValueTest,TransposeOperatorsTest,Utf8WriterReuseTest,FlinkEltSqlHarnessTest,FlinkFixedBinarySqlHarnessTest,FlinkBinaryStringBuiltinsSqlHarnessTest,FlinkVariableBinaryEltSqlHarnessTest,FlinkNestedScalarRecoveryTest,FlinkNestedScalarRemoteDeploymentTest
-          -Dsf.testForks=1
-          "-Dsf.extraJvmArgs=-Djava.library.path=$GITHUB_WORKSPACE/native/target/debug -Dstreamfusion.experimental.temporalScalarUdfs=true -Dstreamfusion.experimental.jvmAccumulatorCacheEntries=65536 -Dstreamfusion.experimental.borrowedStringExit=true"
+          -Dsf.testForks=2
+          -Dsf.testReuseForks=false
+          "-Dsf.extraJvmArgs=-Xmx4g -Djava.library.path=$GITHUB_WORKSPACE/native/target/debug -Dstreamfusion.experimental.temporalScalarUdfs=true -Dstreamfusion.experimental.jvmAccumulatorCacheEntries=65536 -Dstreamfusion.experimental.borrowedStringExit=true"
           surefire:test@default-test
 
       - name: Check deployed Java 11 bytecode including embedded payloads
+        if: matrix.shard == 1
         run: |
           mvn -B -ntp ${{ matrix.profile }} package -DskipTests -Dnative.build.skip=true
           python3 -m unittest discover -s bin -p 'test_check_java_bytecode.py'
           python3 bin/check-java-bytecode.py
 
       - name: Upload Java failure diagnostics
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: java-failure-diagnostics-${{ matrix.line }}${{ matrix.jdk == '11' && '-jdk11' || '' }}
+          name: java-failure-diagnostics-${{ matrix.line }}${{ matrix.jdk == '11' && '-jdk11' || '' }}-shard${{ matrix.shard }}
           path: |
             **/surefire-reports/*.xml
             **/surefire-reports/*.txt
@@ -207,13 +259,92 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload portable SQL audit outcomes
+      - name: Upload runtime test partition
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-runtime-partition-${{ matrix.line }}-jdk${{ matrix.jdk }}-shard${{ matrix.shard }}
+          path: ${{ runner.temp }}/runtime-test-includes.*
+          if-no-files-found: error
+
+      - name: Upload portable SQL audit outcomes
+        if: always() && matrix.shard == 1
         uses: actions/upload-artifact@v4
         with:
           name: portable-sql-audit-${{ matrix.line }}${{ matrix.jdk == '11' && '-jdk11' || '' }}
           path: streamfusion-runtime/target/sql-audit/*.json
           if-no-files-found: error
+
+  canonical-job-tests:
+    needs: native-build
+    name: Canonical savepoint jobs (JDK ${{ matrix.jdk }}) (shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: ['17', '11']
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    env:
+      SF_KAFKA_INTEGRATION: 'true'
+      # Each handoff starts a fresh worker; optimizing compilation cannot amortize here.
+      JAVA_TOOL_OPTIONS: '-XX:TieredStopAtLevel=1'
+    steps:
+      - uses: actions/checkout@v6
+      - name: Free disk space
+        run: python3 bin/ci-free-disk.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.jdk }}
+          cache: maven
+      - uses: actions/download-artifact@v5
+        with:
+          name: debug-native-${{ github.sha }}
+          path: native/target/debug
+      - name: Resolve Java dependencies before tests
+        run: |
+          python3 bin/ci-maven-dependencies.py --profile canonical-kafka --projects streamfusion-runtime
+          python3 bin/ci-maven-dependencies.py --artifact org.apache.maven.surefire:surefire-junit-platform:3.2.5 --artifact com.google.protobuf:protobuf-java:2.5.0
+      - name: Compile and partition complete canonical jobs
+        run: |
+          mvn -B -ntp -Pcanonical-kafka -pl streamfusion-runtime -am test -DskipTests -Dnative.build.skip=true
+          python3 bin/ci_runtime_test_shards.py \
+            --classes streamfusion-runtime/target/test-classes \
+            --suite canonical --count 16 --index ${{ matrix.shard }} \
+            --output "$RUNNER_TEMP/canonical-job-includes.txt"
+      - name: Run every selected canonical job
+        env:
+          SF_CANONICAL_CDS_DIR: ${{ runner.temp }}/canonical-cds
+        run: >-
+          mvn -B -ntp -Pcanonical-kafka -pl streamfusion-runtime -am test
+          -Dnative.build.skip=true
+          "-Dsf.runtime.testIncludesFile=$RUNNER_TEMP/canonical-job-includes.txt"
+          -Dsf.testForks=2 -Dsf.testReuseForks=false "-Dsf.extraJvmArgs=-Xmx2g"
+      - name: Retain canonical job selection and outcomes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canonical-job-results-jdk${{ matrix.jdk }}-shard${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/canonical-job-includes.*
+            streamfusion-runtime/target/surefire-reports/*
+            ${{ runner.temp }}/canonical-cds/*.log
+            **/hs_err_pid*.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove canonical worker class metadata
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+          directory = Path(os.environ['RUNNER_TEMP']) / 'canonical-cds'
+          if directory.exists():
+              shutil.rmtree(directory)
+          PY
 
   lake-module-tests:
     needs: native-build
@@ -221,7 +352,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - name: Delta
@@ -303,6 +434,24 @@ jobs:
           mvn -B -ntp -P${{ matrix.profile }}
           -pl ${{ matrix.module }} -am test -Dsf.runtime.tests.skip=true -Dnative.build.skip=true
 
+      - name: Run unchanged Paimon compaction fixtures with stock and native work evidence
+        if: matrix.name == 'Paimon Parquet' && matrix.jdk == '17'
+        run: |
+          python3 bin/ci-maven-dependencies.py --profile paimon,upstream-paimon-compaction --projects streamfusion-paimon --also-make
+          python3 bin/ci-maven-dependencies.py --pom dev/flink-suite/agent/pom.xml
+          python3 bin/paimon-compaction-suite.py --skip-native-build
+
+      - name: Retain Paimon compaction results and invocation evidence
+        if: always() && matrix.name == 'Paimon Parquet' && matrix.jdk == '17'
+        uses: actions/upload-artifact@v4
+        with:
+          name: paimon-compaction-upstream
+          path: |
+            streamfusion-paimon/target/upstream-compaction/
+            streamfusion-paimon/target/surefire-reports/
+          if-no-files-found: error
+          retention-days: 7
+
   doris-tests:
     needs: native-build
     name: Doris connector and upstream SQL tests
@@ -340,7 +489,8 @@ jobs:
           retention-days: 7
 
   image-integration:
-    if: ${{ github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main' }}
+    needs: plan
+    if: needs.plan.outputs.tests == 'true'
     name: Flink image integration (optimized native build)${{ matrix.suffix }}
     runs-on: ubuntu-22.04
     timeout-minutes: 90
@@ -372,7 +522,7 @@ jobs:
         with:
           key: ubuntu-22.04-glibc-2.35
           workspaces: native -> target/release-staging
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main' }}
 
       - name: Resolve image dependencies before builds and tests
         run: python3 bin/ci-maven-dependencies.py --profile "${{ matrix.profile }}"
@@ -456,11 +606,20 @@ jobs:
   all-tests:
     name: All CI tests
     if: ${{ (always() && !cancelled()) && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main') }}
-    needs: [native-build, native-tests, java-tests, lake-module-tests, image-integration, doris-tests]
+    needs: [plan, native-build, native-tests, java-tests, canonical-job-tests, lake-module-tests, image-integration, doris-tests]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every test job to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-        run: jq -e 'length > 0 and all(.[]; .result == "success")' <<< "$NEEDS_JSON"
+          DOCS_ONLY: ${{ needs.plan.outputs.tests == 'false' }}
+        run: |
+          jq -e --arg docs "$DOCS_ONLY" '
+            .plan.result == "success" and
+            if $docs == "true" then
+              all(to_entries[]; .key == "plan" or .value.result == "skipped")
+            else
+              all(.[]; .result == "success")
+            end
+          ' <<< "$NEEDS_JSON"
