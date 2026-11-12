@@ -25,23 +25,26 @@ PARALLEL_CLASSES = (
 )
 
 
-def profile(output, repetitions, cds=False, parallel=False, gc=False, line="2.2", worker_mix=False):
+def profile(output, repetitions, cds=False, parallel=False, gc=False, line="2.2", worker_mix=False, poll=False):
     if "TieredStopAtLevel" in os.environ.get("JAVA_TOOL_OPTIONS", ""):
         raise ValueError("Remove inherited TieredStopAtLevel so the default trial uses normal compilation")
     if os.environ.get("SF_CANONICAL_CDS_DIR"):
         raise ValueError("Remove inherited SF_CANONICAL_CDS_DIR so the default trial has no worker archive")
     if gc and "GC" in os.environ.get("JAVA_TOOL_OPTIONS", ""):
         raise ValueError("Remove inherited garbage-collector settings before comparing collectors")
+    if poll and "handoffPollMillis" in os.environ.get("JAVA_TOOL_OPTIONS", ""):
+        raise ValueError("Remove inherited handoff polling settings before comparing intervals")
     output.mkdir(parents=True, exist_ok=False)
     temporary = output / "tmp"
     temporary.mkdir()
     reports = ROOT / "streamfusion-runtime/target/surefire-reports"
     trials = []
     expected = None
-    preparations = ("gc-g1", "gc-serial") if gc else ("cds-two" if parallel else "cds",)
+    preparations = (("poll-old",) if poll else ("gc-g1", "gc-serial") if gc
+                    else ("cds-two" if parallel else "cds",))
     schedule = [(mode, -1, "preparation") for mode in preparations] if cds else []
     for index in range(repetitions):
-        modes = (("gc-g1", "gc-serial") if gc else ("cds-two", "cds-four") if parallel else
+        modes = (("poll-old", "poll-quick") if poll else ("gc-g1", "gc-serial") if gc else ("cds-two", "cds-four") if parallel else
                  ("default", "startup", "cds") if cds else ("default", "startup"))
         if index % 2:
             modes = tuple(reversed(modes))
@@ -55,14 +58,16 @@ def profile(output, repetitions, cds=False, parallel=False, gc=False, line="2.2"
                 options += " -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m"
             if gc:
                 options += " -XX:+UseSerialGC" if mode == "gc-serial" else " -XX:+UseG1GC"
+            if poll:
+                options += " -Dsf.canonical.handoffPollMillis=" + ("100" if mode == "poll-quick" else "1000")
             environment = {**os.environ, "JAVA_TOOL_OPTIONS": options}
-            use_archive = gc or mode in ("cds", "cds-two", "cds-four")
+            use_archive = poll or gc or mode in ("cds", "cds-two", "cds-four")
             if use_archive:
                 environment["SF_CANONICAL_CDS_DIR"] = str(
                     temporary / (mode if gc else "archives"))
             if parallel or worker_mix:
                 environment["SF_KAFKA_INTEGRATION"] = "true"
-            forks, heap = (4, "1g") if gc or mode == "cds-four" else (2, "2g")
+            forks, heap = (4, "1g") if poll or gc or mode == "cds-four" else (2, "2g")
             selection = ",".join(PARALLEL_CLASSES) if parallel or worker_mix else SELECTION
             command = ["mvn", "-B", "-ntp", "-pl", "streamfusion-runtime",
                        f"-Dtest={selection}", f"-Dsf.testForks={forks}",
@@ -143,12 +148,13 @@ def main():
     comparison = parser.add_mutually_exclusive_group()
     comparison.add_argument("--parallel", action="store_true", help="Compare two vs four fresh forks with prepared worker metadata")
     comparison.add_argument("--gc", action="store_true", help="Compare G1 and Serial GC with current startup settings and separate prepared archives")
+    comparison.add_argument("--poll", action="store_true", help="Compare 1-second and 100ms handoff readiness polling with unchanged deadlines")
     parser.add_argument("--line", choices=("1.18", "2.2"), default="2.2")
     parser.add_argument("--worker-mix", action="store_true", help="Compare collectors with eight complete canonical classes and four busy forks")
     args = parser.parse_args()
-    if args.worker_mix and not args.gc:
-        parser.error("--worker-mix requires --gc")
-    if args.parallel or args.gc:
+    if args.worker_mix and not (args.gc or args.poll):
+        parser.error("--worker-mix requires --gc or --poll")
+    if args.parallel or args.gc or args.poll:
         args.cds = True
     if args.repetitions < 2:
         parser.error("Use at least two pairs to alternate execution order")
@@ -167,7 +173,7 @@ def main():
                 capture_output=True, text=True, timeout=120)
         if supported.returncode:
             parser.error("This JVM cannot use class-data sharing; omit --cds to measure default/first-tier compilation")
-    profile(args.output.resolve(), args.repetitions, args.cds, args.parallel, args.gc, args.line, args.worker_mix)
+    profile(args.output.resolve(), args.repetitions, args.cds, args.parallel, args.gc, args.line, args.worker_mix, args.poll)
 
 
 if __name__ == "__main__":

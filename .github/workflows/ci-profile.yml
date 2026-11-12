@@ -19,7 +19,7 @@ on:
       hotspot_mode:
         description: 'Attribute slow classes or compare their worker counts'
         type: choice
-        options: [attribution, parallel, plan-cache, canonical-parallel, canonical-gc, canonical-gc-matrix, deeper-runtime, fluss-details, recursive-completion, recovery-diagnostics, recovery-transport, fluss-close, runtime-regressions]
+        options: [attribution, parallel, plan-cache, canonical-parallel, canonical-gc, canonical-gc-matrix, canonical-poll, deeper-runtime, fluss-details, recursive-completion, recovery-diagnostics, recovery-transport, fluss-close, runtime-regressions]
         default: attribution
 
 permissions:
@@ -175,7 +175,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          filter: blob:none
       - run: python3 bin/ci-free-disk.py
       - uses: actions/setup-java@v4
         with:
@@ -201,6 +201,7 @@ jobs:
           jobs = api(f'repos/{repo}/actions/runs/{run_id}/jobs?per_page=100')['jobs']
           if not any(j['name'] == 'Shared debug native libraries' and j['conclusion'] == 'success' for j in jobs):
               raise SystemExit('Native producer has not succeeded')
+          subprocess.run(['git', 'fetch', '--no-tags', '--filter=blob:none', '--depth=1', 'origin', sha], check=True)
           subprocess.run(['git', 'diff', '--exit-code', sha, 'HEAD', '--',
                           'native', 'rust-toolchain.toml', '.cargo', '.github/actions/setup-rust'], check=True)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
@@ -299,6 +300,8 @@ jobs:
             python3 bin/profile-canonical-ci.py --gc --repetitions 3 --output "$RUNNER_TEMP/runtime-hotspots"
           elif [[ "$HOTSPOT_MODE" == 'canonical-gc-matrix' ]]; then
             python3 bin/profile-canonical-ci.py --gc --worker-mix --line "$FLINK_LINE" --repetitions 2 --output "$RUNNER_TEMP/runtime-hotspots"
+          elif [[ "$HOTSPOT_MODE" == 'canonical-poll' ]]; then
+            python3 bin/profile-canonical-ci.py --poll --repetitions 3 --output "$RUNNER_TEMP/runtime-hotspots"
           else
             python3 bin/profile-runtime-ci.py "${args[@]}" --output "$RUNNER_TEMP/runtime-hotspots"
           fi

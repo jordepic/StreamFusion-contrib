@@ -378,7 +378,9 @@ public final class CanonicalJobWorker {
             completion.get(5, TimeUnit.SECONDS);
             throw new AssertionError("job ended before the handoff boundary");
           }
-          var key = watcher.poll(1, TimeUnit.SECONDS);
+          var key =
+              watcher.poll(
+                  Long.getLong("sf.canonical.handoffPollMillis", 1000L), TimeUnit.MILLISECONDS);
           if (key != null) {
             key.pollEvents();
             key.reset();

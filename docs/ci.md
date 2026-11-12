@@ -828,6 +828,15 @@ Canonical shards have a 180-minute limit; no test is removed to make a shard pas
 
 ## Profiling CI latency and cost
 
+The `canonical-poll` hotspot dispatch compares the existing one-second handoff readiness
+poll timeout with 100 ms, on JDK 11 and 17. Filesystem creation notifications still wake
+the worker immediately. The fallback interval also covers readiness counters and completed
+task states that can change without another file creation. Both variants retain the same
+readiness conditions, 60-second deadline, handoff/checkpoint assertions, first-tier compiler,
+four fresh 1 GiB parent forks and metadata archives. One preparation precedes three
+alternating five-case pairs. Required jobs keep the original timeout unless the measured
+comparison and complete source matrix qualify a change.
+
 The [initial collector probe](benchmarks/ci-profile-20261112.json) passed all 80
 invocations on Flink 2.2, including separate archive preparation. Serial GC reduced
 the five-case JDK 11 elapsed median from 112.40 to 102.25 seconds (9.0%) and CPU median

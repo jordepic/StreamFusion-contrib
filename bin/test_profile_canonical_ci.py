@@ -17,7 +17,7 @@ spec.loader.exec_module(profile)
 
 
 class CanonicalProfileTest(unittest.TestCase):
-    def run_comparison(self, missing_case=False, worker_mix=False, line="2.2"):
+    def run_comparison(self, missing_case=False, worker_mix=False, line="2.2", poll=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             reports = root / "streamfusion-runtime/target/surefire-reports"
@@ -49,9 +49,9 @@ class CanonicalProfileTest(unittest.TestCase):
                     patch.object(profile.subprocess, "run", side_effect=run):
                 if missing_case:
                     with self.assertRaisesRegex(RuntimeError, "Incomplete or inconsistent"):
-                        profile.profile(root / "results", 3, cds=True, gc=True, line=line, worker_mix=worker_mix)
+                        profile.profile(root / "results", 3, cds=True, gc=not poll, line=line, worker_mix=worker_mix, poll=poll)
                 else:
-                    profile.profile(root / "results", 3, cds=True, gc=True, line=line, worker_mix=worker_mix)
+                    profile.profile(root / "results", 3, cds=True, gc=not poll, line=line, worker_mix=worker_mix, poll=poll)
             self.assertFalse((root / "results/tmp").exists())
             return calls, json.loads((root / "results/summary.json").read_text())
 
@@ -76,6 +76,22 @@ class CanonicalProfileTest(unittest.TestCase):
     def test_report_totals_cannot_hide_missing_invocations(self):
         _, trials = self.run_comparison(missing_case=True)
         self.assertEqual(1, len(trials))
+
+    def test_polling_comparison_reuses_identical_metadata_and_checks_the_same_invocations(self):
+        calls, trials = self.run_comparison(poll=True)
+        self.assertEqual(["preparation"] + ["measurement"] * 6, [trial["phase"] for trial in trials])
+        self.assertEqual(["poll-old", "poll-old", "poll-quick", "poll-quick",
+                          "poll-old", "poll-old", "poll-quick"], [trial["mode"] for trial in trials])
+        self.assertEqual([0] + [2] * 6, [count for _, _, count, _ in calls])
+        self.assertEqual(1, len({cache for _, cache, _, _ in calls}))
+        for (options, _, _, command), trial in zip(calls, trials):
+            self.assertIn("-Dsf.canonical.handoffPollMillis=" +
+                          ("100" if trial["mode"] == "poll-quick" else "1000"), options)
+            self.assertNotIn("UseSerialGC", options)
+            self.assertNotIn("UseG1GC", options)
+            self.assertIn("-Dsf.testForks=4", command)
+            self.assertEqual(5, trial["outcomes"]["tests"])
+        self.run_comparison(missing_case=True, poll=True)
 
     def test_full_worker_mix_keeps_both_released_line_profiles_and_every_case(self):
         for line in ("1.18", "2.2"):
