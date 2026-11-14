@@ -6,8 +6,20 @@ on:
       suite:
         description: 'Paired JVM comparison to run'
         type: choice
-        options: [runtime, runtime-parallel, runtime-jfr, canonical, native-only, runtime-hotspots, canonical-setup, lake-setup]
+        options: [runtime, runtime-parallel, runtime-jfr, canonical, native-only, runtime-hotspots, canonical-setup, lake-setup, hudi-benchmark]
         default: runtime
+      hudi_baseline:
+        description: 'Hudi benchmark: full Java-only baseline SHA with identical native inputs'
+        type: string
+      hudi_rows:
+        description: 'Hudi benchmark events per trial (up to 2000000)'
+        type: string
+        default: '200000'
+      hudi_queries:
+        description: 'Hudi benchmark unchanged query selection'
+        type: choice
+        options: ['q8,q12', q8, q12]
+        default: 'q8,q12'
       native_run:
         description: 'Existing native producer for focused diagnostics'
         type: string
@@ -58,6 +70,69 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  hudi-benchmark:
+    if: inputs.suite == 'hudi-benchmark' && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      BASELINE: ${{ inputs.hudi_baseline }}
+      BENCH_ROWS: ${{ inputs.hudi_rows }}
+      BENCH_QUERIES: ${{ inputs.hudi_queries }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          filter: blob:none
+      - name: Check comparison failure handling and source compatibility
+        run: |
+          python3 -m unittest discover -s bin -p test_bench_hudi_java.py
+          python3 bin/bench-hudi-java.py --baseline "$BASELINE" --verify-only \
+            --rows "$BENCH_ROWS" --queries "$BENCH_QUERIES" \
+            --output "$RUNNER_TEMP/hudi-benchmark"
+      - run: python3 bin/ci-free-disk.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17.0.21+9'
+          cache: maven
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: release-hudi
+      - name: Build the two production release libraries once
+        run: >-
+          cargo build --manifest-path native/Cargo.toml --release --locked --lib
+          -p streamfusion -p streamfusion-parquet
+          --features streamfusion/mimalloc,streamfusion-parquet/mimalloc --timings
+      - name: Alternate baseline and candidate on the same isolated runner
+        run: >-
+          python3 bin/bench-hudi-java.py --baseline "$BASELINE"
+          --rows "$BENCH_ROWS" --queries "$BENCH_QUERIES"
+          --output "$RUNNER_TEMP/hudi-benchmark"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hudi-focused-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/hudi-benchmark/summary.json
+            ${{ runner.temp }}/hudi-benchmark/*.log
+            ${{ runner.temp }}/hudi-benchmark/*.json
+            native/target/cargo-timings
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove generated benchmark tables and logs
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+          shutil.rmtree(Path(os.environ['RUNNER_TEMP']) / 'hudi-benchmark', ignore_errors=True)
+          PY
+
   lake-setup:
     if: inputs.suite == 'lake-setup' && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
@@ -131,7 +206,7 @@ jobs:
       kafka_rescale_regression: ${{ inputs.kafka_rescale_regression }}
 
   native:
-    if: ${{ inputs.suite != 'runtime-hotspots' && inputs.suite != 'canonical-setup' && inputs.suite != 'lake-setup' && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main') }}
+    if: ${{ inputs.suite != 'runtime-hotspots' && inputs.suite != 'canonical-setup' && inputs.suite != 'lake-setup' && inputs.suite != 'hudi-benchmark' && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -202,7 +277,7 @@ jobs:
 
   runtime:
     needs: native
-    if: inputs.suite != 'canonical' && inputs.suite != 'native-only' && inputs.suite != 'runtime-hotspots' && inputs.suite != 'canonical-setup' && inputs.suite != 'lake-setup'
+    if: inputs.suite != 'canonical' && inputs.suite != 'native-only' && inputs.suite != 'runtime-hotspots' && inputs.suite != 'canonical-setup' && inputs.suite != 'lake-setup' && inputs.suite != 'hudi-benchmark'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
