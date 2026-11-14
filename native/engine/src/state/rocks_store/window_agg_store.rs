@@ -4,7 +4,7 @@ use super::{
     re, stored_timer_deadline, write_timer_deadline, FlinkWriteBatch, OpenedDb, TIMER_DEADLINE_KEY,
 };
 use crate::*;
-use rocksdb::{Cache, Direction, IteratorMode, Options, ReadOptions, DB};
+use rocksdb::{Cache, IteratorMode, Options, DB};
 #[cfg(test)]
 use std::sync::Arc;
 
@@ -283,6 +283,39 @@ impl RocksWindowAggStore {
         Ok(timers)
     }
 
+    pub(crate) fn slice_timers_from(
+        &self,
+        lower_end: i64,
+    ) -> Result<Vec<(i32, i64, Box<[u8]>)>, DataFusionError> {
+        let mut timers = Vec::new();
+        let mut reader = self.db.raw_iterator();
+        reader.seek(self.timer_key(*self.key_groups.start(), lower_end, &[]));
+        while reader.valid() {
+            super::database::check_cancelled()?;
+            let key = reader.key().unwrap();
+            if key.len() < 4 {
+                break;
+            }
+            let group = i32::from_be_bytes(key[..4].try_into().unwrap());
+            if !self.key_groups.contains(&group) {
+                break;
+            }
+            if key.len() > KEY_PREFIX_LEN {
+                let end = window_end_from(&key[4..KEY_PREFIX_LEN]);
+                if end < lower_end || key[KEY_PREFIX_LEN] == 0 {
+                    reader.seek(self.timer_key(group, end.max(lower_end), &[]));
+                    continue;
+                }
+                if key[KEY_PREFIX_LEN] == 1 {
+                    timers.push((group, end, key[KEY_PREFIX_LEN + 1..].into()));
+                }
+            }
+            reader.next();
+        }
+        reader.status().map_err(re)?;
+        Ok(timers)
+    }
+
     pub(crate) fn visit_slice_timers(
         &self,
         chunk_rows: usize,
@@ -406,40 +439,60 @@ impl RocksWindowAggStore {
         {
             return Ok(Vec::new());
         }
+        let lower_end = (calendar.is_none() && self.next_end_known)
+            .then_some(self.next_exclusive_end)
+            .flatten();
         self.next_end_known = false;
         let mut closed: Vec<(Box<[u8]>, i64, Box<[u8]>)> = Vec::new();
-        let mut candidates = Vec::new();
+        let mut candidates: Vec<(Box<[u8]>, Box<[u8]>, i64)> = Vec::new();
         self.next_exclusive_end = None;
         let mut writes = FlinkWriteBatch::new(&self.db, self.write_batch_size);
-        for key_group in self.key_groups.clone() {
-            let prefix = key_group.to_be_bytes();
-            let mut read = ReadOptions::default();
-            if let Some(next) = key_group.checked_add(1) {
-                read.set_iterate_upper_bound(next.to_be_bytes());
+        let seek_key = |group: i32| {
+            let mut start = group.to_be_bytes().to_vec();
+            if let Some(end) = lower_end {
+                start.extend_from_slice(&biased_window_end(end));
             }
-            for row in self
-                .db
-                .iterator_opt(IteratorMode::From(&prefix, Direction::Forward), read)
-            {
-                let (key, value) = row.map_err(re)?;
-                if key.len() < KEY_PREFIX_LEN || key[..4] != prefix {
+            start
+        };
+        let mut reader = self.db.raw_iterator();
+        reader.seek(seek_key(*self.key_groups.start()));
+        while reader.valid() {
+            super::database::check_cancelled()?;
+            let key = reader.key().unwrap();
+            if key.len() < 4 {
+                break;
+            }
+            let group = i32::from_be_bytes(key[..4].try_into().unwrap());
+            if !self.key_groups.contains(&group) {
+                break;
+            }
+            if key.len() < KEY_PREFIX_LEN {
+                reader.next();
+                continue;
+            }
+            let end = window_end_from(&key[4..KEY_PREFIX_LEN]);
+            if calendar.is_some() {
+                candidates.push((key.into(), reader.value().unwrap().into(), end));
+            } else if lower_end.is_some_and(|lower| end < lower) {
+                reader.seek(seek_key(group));
+                continue;
+            } else if end > watermark {
+                self.next_exclusive_end =
+                    Some(self.next_exclusive_end.map_or(end, |next| next.min(end)));
+                let Some(next) = group.checked_add(1) else {
                     break;
-                }
-                let end = window_end_from(&key[4..KEY_PREFIX_LEN]);
-                if calendar.is_some() {
-                    candidates.push((key, value, end));
-                    continue;
-                }
-                if end > watermark {
-                    self.next_exclusive_end =
-                        Some(self.next_exclusive_end.map_or(end, |next| next.min(end)));
-                    break;
-                }
+                };
+                reader.seek(seek_key(next));
+                continue;
+            } else {
+                let value = reader.value().unwrap();
                 let start = i64::from_le_bytes(value[..8].try_into().expect("window start"));
-                writes.delete(&key)?;
-                closed.push((key, start, value[8..].into()));
+                writes.delete(key)?;
+                closed.push((key.into(), start, value[8..].into()));
             }
+            reader.next();
         }
+        reader.status().map_err(re)?;
         let deadlines = calendar
             .map(|calendar| calendar.end_thresholds(candidates.iter().map(|(_, _, end)| *end)));
         if let Some(deadlines) = &deadlines {
@@ -743,6 +796,46 @@ mod tests {
         assert!(store.take_closed(400).unwrap().is_empty());
         put_groups(&mut store, &[(7, 350, 0, 3, 35)]);
         assert_eq!(sums(&store.take_closed(400).unwrap()), vec![35]);
+    }
+
+    #[test]
+    fn bounded_timer_seek_preserves_keyless_negative_and_frozen_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = test_config("timer-seek");
+        config.table_dir = directory.path().to_string_lossy().into_owned();
+        let mut store = RocksWindowAggStore::create(config, &[DataType::Int64], 0..=127).unwrap();
+        store.set_shared_slices(true);
+        let keys = key_rows(&[1, 2, 3, 4]);
+        put_groups(
+            &mut store,
+            &[
+                (7, -2000, -3000, 1, 10),
+                (7, -1000, -2000, 2, 20),
+                (7, 0, -1000, 1, 10),
+                (7, 100, -900, 3, 30),
+                (9, 200, -800, 4, 40),
+            ],
+        );
+        for (group, end, key) in [
+            (7, -2000, keys[0].as_slice()),
+            (7, -1000, keys[1].as_slice()),
+            (7, 100, keys[2].as_slice()),
+            (9, 200, keys[3].as_slice()),
+            (11, 100, &[]),
+        ] {
+            store.put_slice_timer(group, end, key).unwrap();
+        }
+        store.delete_slice_timer(7, -2000, &keys[0]).unwrap();
+        let expected = store.slice_timers().unwrap();
+        assert_eq!(expected.len(), 4);
+        assert_eq!(store.slice_timers_from(-1000).unwrap(), expected);
+        assert_eq!(store.slice_timers_from(0).unwrap().len(), 3);
+        let frozen = store.db.read_snapshot();
+        store.put_slice_timer(9, 150, &keys[3]).unwrap();
+        let live = std::mem::replace(&mut store.db, frozen);
+        assert_eq!(store.slice_timers_from(-1000).unwrap(), expected);
+        store.db = live;
+        assert_eq!(store.slice_timers_from(-1000).unwrap().len(), 5);
     }
 
     #[test]
