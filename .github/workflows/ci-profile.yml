@@ -174,7 +174,7 @@ jobs:
     if: inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
     name: Hudi Nexmark | ${{ matrix.backend }} | mini=${{ matrix.mini_batch }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
