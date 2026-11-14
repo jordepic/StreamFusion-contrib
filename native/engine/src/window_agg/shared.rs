@@ -71,6 +71,10 @@ impl TumblingAggregator {
         key: OwnedRow,
         key_group: i32,
     ) -> Result<bool, DataFusionError> {
+        #[cfg(feature = "rocksdb-state")]
+        if self.slice_deadline_known {
+            self.next_slice_end = Some(self.next_slice_end.map_or(end, |next| next.min(end)));
+        }
         let added = self
             .slice_timers
             .entry(end)
@@ -444,6 +448,26 @@ impl TumblingAggregator {
 
     pub(super) fn flush_shared(&mut self, watermark: i64) -> Result<RecordBatch, DataFusionError> {
         #[cfg(feature = "rocksdb-state")]
+        if self.store.is_some()
+            && self.calendar.is_none()
+            && self.slice_deadline_known
+            && self.next_slice_end.is_none_or(|end| end > watermark)
+        {
+            return Ok(self.final_batch(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                self.aggregates
+                    .iter()
+                    .map(WindowResultColumn::new)
+                    .collect(),
+            ));
+        }
+        #[cfg(feature = "rocksdb-state")]
+        {
+            self.slice_deadline_known = false;
+        }
+        #[cfg(feature = "rocksdb-state")]
         self.hydrate_slice_timers()?;
         let mut deadlines = self.slice_end_thresholds(self.slice_timers.keys().copied());
         let mut queue = deadlines
@@ -578,6 +602,11 @@ impl TumblingAggregator {
         self.memory.account_shrink();
         self.persist_slice_timers()?;
         self.clear_resident_slice_timers();
+        #[cfg(feature = "rocksdb-state")]
+        {
+            self.next_slice_end = queue.peek().map(|Reverse((epoch, _))| *epoch);
+            self.slice_deadline_known = self.store.is_some() && self.calendar.is_none();
+        }
         Ok(self.final_batch(keys, starts, ends, results))
     }
 

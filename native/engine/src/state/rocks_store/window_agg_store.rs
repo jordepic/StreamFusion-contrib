@@ -55,6 +55,7 @@ pub(crate) struct RocksWindowAggStore {
     watermark: i64,
     shared_slices: bool,
     next_exclusive_end: Option<i64>,
+    next_end_known: bool,
     timer_deadline: i64,
     generation: i64,
     write_batch_size: usize,
@@ -168,6 +169,7 @@ impl RocksWindowAggStore {
             watermark: i64::MIN,
             shared_slices,
             next_exclusive_end: None,
+            next_end_known: false,
             timer_deadline: i64::MIN,
             generation: 0,
             write_batch_size: opened.write_batch_size,
@@ -187,6 +189,7 @@ impl RocksWindowAggStore {
     /// Adopts the sidecars a blob import restored (they arrive with the blobs, not from a store
     /// checkpoint); the next checkpoint persists them under the reserved keys.
     pub(crate) fn adopt_restored(&mut self, watermark: i64, timer_deadline: i64) {
+        self.next_end_known = false;
         self.watermark = self.watermark.max(watermark);
         self.timer_deadline = self.timer_deadline.max(timer_deadline);
     }
@@ -361,6 +364,13 @@ impl RocksWindowAggStore {
         state_columns: &[ArrayRef],
         timers: impl IntoIterator<Item = (i32, i64, &'a [u8])>,
     ) -> Result<(), DataFusionError> {
+        if self.next_end_known {
+            for (key, _) in entries {
+                let end = window_end_from(&key[4..KEY_PREFIX_LEN]);
+                self.next_exclusive_end =
+                    Some(self.next_exclusive_end.map_or(end, |next| next.min(end)));
+            }
+        }
         let mut writes = FlinkWriteBatch::new(&self.db, self.write_batch_size);
         for (key_group, end, key) in timers {
             writes.put(self.timer_key(key_group, end, key), [])?;
@@ -390,6 +400,13 @@ impl RocksWindowAggStore {
         watermark: i64,
         calendar: Option<&crate::window_calendar::WindowCalendar>,
     ) -> Result<Vec<StoredWindowGroup>, DataFusionError> {
+        if calendar.is_none()
+            && self.next_end_known
+            && self.next_exclusive_end.is_none_or(|end| end > watermark)
+        {
+            return Ok(Vec::new());
+        }
+        self.next_end_known = false;
         let mut closed: Vec<(Box<[u8]>, i64, Box<[u8]>)> = Vec::new();
         let mut candidates = Vec::new();
         self.next_exclusive_end = None;
@@ -457,6 +474,7 @@ impl RocksWindowAggStore {
             self.state_codec.delete_owner_into(&mut writes, &owner)?;
         }
         writes.finish()?;
+        self.next_end_known = calendar.is_none();
         Ok(groups)
     }
 
@@ -707,6 +725,24 @@ mod tests {
         drop(store);
         let reopened = RocksWindowAggStore::create(config, &[DataType::Int64], 0..=127).unwrap();
         assert_eq!(reopened.scan_all().unwrap().len(), groups.len());
+    }
+
+    #[test]
+    fn firing_tracks_earlier_inserts_after_pending_and_empty_scans() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = test_config("deadline-cache");
+        config.table_dir = directory.path().to_string_lossy().into_owned();
+        let mut store = RocksWindowAggStore::create(config, &[DataType::Int64], 0..=127).unwrap();
+        assert!(store.take_closed(0).unwrap().is_empty());
+        put_groups(&mut store, &[(7, 300, 0, 1, 30)]);
+        assert!(store.take_closed(100).unwrap().is_empty());
+        put_groups(&mut store, &[(9, 200, 0, 2, 20)]);
+        assert!(store.take_closed(199).unwrap().is_empty());
+        assert_eq!(sums(&store.take_closed(200).unwrap()), vec![20]);
+        assert_eq!(sums(&store.take_closed(300).unwrap()), vec![30]);
+        assert!(store.take_closed(400).unwrap().is_empty());
+        put_groups(&mut store, &[(7, 350, 0, 3, 35)]);
+        assert_eq!(sums(&store.take_closed(400).unwrap()), vec![35]);
     }
 
     #[test]
