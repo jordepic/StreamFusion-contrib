@@ -107,6 +107,15 @@ jobs:
           cargo build --manifest-path native/Cargo.toml --release --locked --lib
           -p streamfusion -p streamfusion-parquet
           --features streamfusion/mimalloc,streamfusion-parquet/mimalloc --timings
+      - name: Retain release libraries for source-verified follow-up comparisons
+        uses: actions/upload-artifact@v4
+        with:
+          name: hudi-release-native-${{ github.sha }}
+          path: |
+            native/target/release/libstreamfusion.so
+            native/target/release/libstreamfusion_parquet.so
+          if-no-files-found: error
+          retention-days: 1
       - name: Alternate baseline and candidate on the same isolated runner
         run: >-
           python3 bin/bench-hudi-java.py --baseline "$BASELINE"
