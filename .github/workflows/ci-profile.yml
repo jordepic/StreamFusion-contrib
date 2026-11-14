@@ -24,6 +24,11 @@ on:
         description: 'Run the full two-million-event, four-configuration Hudi matrix'
         type: boolean
         default: false
+      hudi_configurations:
+        description: 'Full Hudi matrix configurations; select unfinished configurations for a retry'
+        type: choice
+        options: [all, 'off', memory-false, memory-true, rocksdb-false, rocksdb-true]
+        default: all
       native_run:
         description: 'Native producer run ID; full Hudi matrix requires a successful release benchmark'
         type: string
@@ -70,7 +75,7 @@ env:
   CANONICAL_JAVA_17: '17.0.21+9'
 
 concurrency:
-  group: ci-startup-profile-${{ github.ref }}-${{ inputs.suite }}-${{ inputs.hotspot_mode }}-${{ inputs.flink_line || 'all' }}-${{ inputs.jdk || 'all' }}-${{ inputs.parent_jfr && 'jfr' || 'plain' }}${{ inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix && '-full-hudi' || '' }}
+  group: ci-startup-profile-${{ github.ref }}-${{ inputs.suite }}-${{ inputs.hotspot_mode }}-${{ inputs.flink_line || 'all' }}-${{ inputs.jdk || 'all' }}-${{ inputs.parent_jfr && 'jfr' || 'plain' }}${{ inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix && format('-full-hudi-{0}', inputs.hudi_configurations || 'all') || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -152,8 +157,10 @@ jobs:
     timeout-minutes: 10
     outputs:
       artifact: ${{ steps.native.outputs.artifact }}
+      matrix: ${{ steps.select.outputs.matrix }}
     env:
       NATIVE_RUN: ${{ inputs.native_run }}
+      HUDI_CONFIGURATIONS: ${{ inputs.hudi_configurations || 'all' }}
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@v6
@@ -163,6 +170,16 @@ jobs:
         run: |
           python3 -m unittest discover -s bin -p test_bench_hudi_matrix.py
           python3 -m unittest discover -s bin -p test_ci_native_source.py
+      - name: Select complete configurations for this run
+        id: select
+        run: |
+          python3 - <<'PY_MATRIX'
+          import json, os, runpy
+          select = runpy.run_path('bin/bench-hudi-matrix.py')['configurations']
+          matrix = {'include': select(os.environ['HUDI_CONFIGURATIONS'])}
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps(matrix) + '\n')
+          PY_MATRIX
       - name: Verify the completed release native producer once
         id: native
         env:
@@ -177,9 +194,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      matrix:
-        backend: [memory, rocksdb]
-        mini_batch: ['false', 'true']
+      matrix: ${{ fromJSON(needs.hudi-matrix-setup.outputs.matrix) }}
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
