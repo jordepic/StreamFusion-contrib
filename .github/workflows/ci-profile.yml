@@ -20,8 +20,12 @@ on:
         type: choice
         options: ['q8,q12', q8, q12]
         default: 'q8,q12'
+      hudi_full_matrix:
+        description: 'Run the full two-million-event, four-configuration Hudi matrix'
+        type: boolean
+        default: false
       native_run:
-        description: 'Existing native producer for focused diagnostics'
+        description: 'Native producer run ID; full Hudi matrix requires a successful release benchmark'
         type: string
       lake_module:
         description: 'Lake module for the setup diagnostic (Hudi uses Flink 1.18)'
@@ -66,12 +70,12 @@ env:
   CANONICAL_JAVA_17: '17.0.21+9'
 
 concurrency:
-  group: ci-startup-profile-${{ github.ref }}-${{ inputs.suite }}-${{ inputs.hotspot_mode }}-${{ inputs.flink_line || 'all' }}-${{ inputs.jdk || 'all' }}-${{ inputs.parent_jfr && 'jfr' || 'plain' }}
+  group: ci-startup-profile-${{ github.ref }}-${{ inputs.suite }}-${{ inputs.hotspot_mode }}-${{ inputs.flink_line || 'all' }}-${{ inputs.jdk || 'all' }}-${{ inputs.parent_jfr && 'jfr' || 'plain' }}${{ inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix && '-full-hudi' || '' }}
   cancel-in-progress: true
 
 jobs:
   hudi-benchmark:
-    if: inputs.suite == 'hudi-benchmark' && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
+    if: inputs.suite == 'hudi-benchmark' && !inputs.hudi_full_matrix && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -141,6 +145,88 @@ jobs:
           import shutil
           shutil.rmtree(Path(os.environ['RUNNER_TEMP']) / 'hudi-benchmark', ignore_errors=True)
           PY
+
+  hudi-matrix-setup:
+    if: inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      artifact: ${{ steps.native.outputs.artifact }}
+    env:
+      NATIVE_RUN: ${{ inputs.native_run }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          filter: blob:none
+      - name: Check complete-matrix and native-producer failure handling
+        run: |
+          python3 -m unittest discover -s bin -p test_bench_hudi_matrix.py
+          python3 -m unittest discover -s bin -p test_ci_native_source.py
+      - name: Verify the completed release native producer once
+        id: native
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 bin/ci_native_source.py --release-hudi --run "$NATIVE_RUN"
+
+  hudi-matrix:
+    needs: hudi-matrix-setup
+    if: inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
+    name: Hudi Nexmark | ${{ matrix.backend }} | mini=${{ matrix.mini_batch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [memory, rocksdb]
+        mini_batch: ['false', 'true']
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      NATIVE_RUN: ${{ inputs.native_run }}
+      BENCH_BACKEND: ${{ matrix.backend }}
+      BENCH_MINI_BATCH: ${{ matrix.mini_batch }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          filter: blob:none
+      - run: python3 bin/ci-free-disk.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17.0.21+9'
+          cache: maven
+      - uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.hudi-matrix-setup.outputs.artifact }}
+          run-id: ${{ inputs.native_run }}
+          github-token: ${{ github.token }}
+          path: native/target/release
+      - name: Run all unchanged queries and three engines in this configuration
+        run: >-
+          python3 bin/bench-hudi-matrix.py --backend "$BENCH_BACKEND"
+          --mini-batch "$BENCH_MINI_BATCH" --native-producer-run "$NATIVE_RUN"
+          --output "$RUNNER_TEMP/hudi-matrix"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hudi-matrix-${{ matrix.backend }}-${{ matrix.mini_batch }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/hudi-matrix/summary.json
+            ${{ runner.temp }}/hudi-matrix/result.json
+            ${{ runner.temp }}/hudi-matrix/maven.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove generated benchmark tables and logs
+        if: always()
+        run: |
+          python3 - <<'PY_CLEAN'
+          import os
+          from pathlib import Path
+          import shutil
+          shutil.rmtree(Path(os.environ['RUNNER_TEMP']) / 'hudi-matrix', ignore_errors=True)
+          PY_CLEAN
 
   lake-setup:
     if: inputs.suite == 'lake-setup' && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
