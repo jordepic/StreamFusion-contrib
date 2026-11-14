@@ -215,7 +215,7 @@ public final class StreamFusionSuiteAgent {
                                 named("optimizeConfigured")
                                     .or(
                                         named("optimizeRoots")
-                                            .and(takesArguments(3))
+                                            .and(takesArguments(2))
                                             .and(
                                                 isDeclaredBy(
                                                     named(
