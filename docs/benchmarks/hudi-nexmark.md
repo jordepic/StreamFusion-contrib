@@ -97,8 +97,9 @@ The fixed configuration retains two million events, four physical Hudi
 source/sink partitions, eight slots, 8 GiB heap, a 48 GiB logical native off-heap
 limit, object reuse, one-second checkpoints, one warmup and three rotating
 stock/previous/native trials. Each runner has four processors and JDK 17.0.21+9.
-Heap off/on and RocksDB/off use Intel Xeon 6975P-C hosts; RocksDB/on uses AMD
-EPYC 9V45. Physical memory is about 15.3–15.6 GiB. Compare engines **within each
+Heap/off uses an Intel Xeon Platinum 8573C host. Heap/on and RocksDB/off use
+Intel Xeon 6975P-C hosts; RocksDB/on uses AMD EPYC 9V45. Physical memory is about
+15.3–15.6 GiB. Compare engines **within each
 configuration**: these hosts do not establish causal backend, mini-batch or
 before/after effects. These are complete-job timings, not sustained throughput.
 
