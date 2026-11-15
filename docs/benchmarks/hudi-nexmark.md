@@ -309,7 +309,7 @@ These inclusive shares overlap, and Calc chains include downstream operators;
 they are not isolated component timings or a matched speedup comparison. The
 [compact observations](hudi-q8-profile-20261114.json) record source/library hashes
 and link the independently verified, versioned archive of folded stacks and logs.
-Repeated handoffs remain a target for profiling after the complete matrix.
+Repeated handoffs remain a target for further profiling.
 
 Historical development logs and diagnostics are preserved in a separate
 [versioned evidence archive](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-development-20261114-866620764).
@@ -394,7 +394,7 @@ are removed after each run.
 
 The completed heap configurations below are the baseline before persistent-window
 deadline caching. The first RocksDB campaign stopped during Q5 to prioritize its
-performance regression. The full matrix will be requalified after focused tuning.
+performance regression. The complete Linux matrix above follows that tuning.
 macOS power logs confirmed repeated host
 suspensions during the earlier campaign, and a later previous-path Q10 run failed
 with an expired Hudi commit heartbeat. The earlier full-value comparisons remain

@@ -36,7 +36,7 @@ class HudiMatrixTest(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci-profile.yml").read_text()
         suites = ["runtime", "runtime-parallel", "runtime-jfr", "canonical", "native-only",
                   "runtime-hotspots", "canonical-setup", "lake-setup", "hudi-benchmark",
-                  "hudi-native", "hudi-diagnostic", "future-focused-mode"]
+                  "hudi-native", "hudi-diagnostic", "native-lz4", "future-focused-mode"]
         for job, expected in [("native", {"runtime", "runtime-parallel", "runtime-jfr", "canonical", "native-only"}),
                               ("runtime", {"runtime", "runtime-parallel", "runtime-jfr"})]:
             body = re.search(rf"^  {job}:\n(.*?)(?=^  [a-z-]+:|\Z)", workflow, re.M | re.S)[1]
