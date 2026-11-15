@@ -455,22 +455,18 @@ impl TumblingAggregator {
         Ok(present.then_some(merged))
     }
 
-    pub(super) fn flush_shared(&mut self, watermark: i64) -> Result<RecordBatch, DataFusionError> {
+    pub(super) fn flush_shared_to(
+        &mut self,
+        watermark: i64,
+        consume: &mut dyn FnMut(RecordBatch) -> Result<(), DataFusionError>,
+    ) -> Result<(), DataFusionError> {
         #[cfg(feature = "rocksdb-state")]
         if self.store.is_some()
             && self.calendar.is_none()
             && self.slice_deadline_known
             && self.next_slice_end.is_none_or(|end| end > watermark)
         {
-            return Ok(self.final_batch(
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                self.aggregates
-                    .iter()
-                    .map(WindowResultColumn::new)
-                    .collect(),
-            ));
+            return Ok(());
         }
         #[cfg(feature = "rocksdb-state")]
         let lower_end = (self.calendar.is_none() && self.slice_deadline_known)
@@ -486,14 +482,7 @@ impl TumblingAggregator {
             .iter()
             .map(|(&end, &epoch)| Reverse((epoch, end)))
             .collect::<BinaryHeap<_>>();
-        let mut keys = Vec::new();
-        let mut starts = Vec::new();
-        let mut ends = Vec::new();
-        let mut results = self
-            .aggregates
-            .iter()
-            .map(WindowResultColumn::new)
-            .collect::<Vec<_>>();
+        let mut output = output::WindowOutput::new(self);
         while let Some(Reverse((epoch, end))) = queue.peek().copied() {
             if epoch > watermark {
                 break;
@@ -521,16 +510,12 @@ impl TumblingAggregator {
                 if let Some(mut merged) = merged {
                     live = Self::group_is_live(self.live_count, &mut merged)?;
                     if live {
-                        keys.push(key.clone());
-                        starts.push(if self.cumulative {
+                        let start = if self.cumulative {
                             self.shared_base(end)
                         } else {
                             end - self.window_millis
-                        });
-                        ends.push(end);
-                        for (values, accumulator) in results.iter_mut().zip(&mut merged) {
-                            values.push(accumulator.as_mut())?;
-                        }
+                        };
+                        output.push(self, key.clone(), start, end, &mut merged, consume)?;
                     }
                     if self.cumulative_prefix() {
                         let first = self.shared_base(end) + self.slide_millis;
@@ -619,7 +604,7 @@ impl TumblingAggregator {
             self.next_slice_end = queue.peek().map(|Reverse((epoch, _))| *epoch);
             self.slice_deadline_known = self.store.is_some() && self.calendar.is_none();
         }
-        Ok(self.final_batch(keys, starts, ends, results))
+        output.emit(self, consume)
     }
 
     #[cfg(feature = "rocksdb-state")]

@@ -16,16 +16,24 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = (
-    "src/main/java/tech/streamfusion/operator/NativeCalcOperator.java",
-    "src/main/java/tech/streamfusion/operator/TaskOffHeapMemory.java",
+    "streamfusion-core/src/main/java/tech/streamfusion/operator/NativeCalcOperator.java",
+    "streamfusion-core/src/main/java/tech/streamfusion/operator/TaskOffHeapMemory.java",
     "streamfusion-hudi/src/main/java/tech/streamfusion/planner/stream/HudiSinkMatcher.java",
 )
+PRODUCTION = ("src/main", "streamfusion-core/src/main", "streamfusion-hudi/src/main",
+              "streamfusion-parquet/src/main")
 FIXED = (
     "native", "rust-toolchain.toml", ".cargo", ".github/actions/setup-rust", "pom.xml",
     "streamfusion-core/pom.xml", "streamfusion-hudi/pom.xml", "streamfusion-parquet/pom.xml",
     "streamfusion-hudi/src/nexmark", "src/test/java/tech/streamfusion/NexmarkMatrixBenchmark.java",
     "src/test/java/tech/streamfusion/NexmarkKafkaBenchmark.java",
+    "src/test/java/tech/streamfusion/NexmarkBenchmark.java",
+    "src/test/java/tech/streamfusion/SortedOutput.java",
+    "src/test/java/tech/streamfusion/TestLookupTableFactory.java",
     "src/test/java/tech/streamfusion/SharedFlinkCluster.java",
+    "src/test/java/tech/streamfusion/SharedFlinkClusterSession.java",
+    "src/test/java-flink1.18/tech/streamfusion/compat/FlinkTestContexts.java",
+    "src/test/proto", "streamfusion-core/src/iceberg-nexmark/resources",
 )
 
 
@@ -74,7 +82,7 @@ def compare(args):
     if git("diff", "--name-only", args.baseline, head, "--", *FIXED):
         raise ValueError("Baseline must use identical native inputs and benchmark harness")
     changed = set(git("diff", "--name-only", args.baseline, head, "--",
-                      "src/main", "streamfusion-hudi/src/main").splitlines())
+                      *PRODUCTION).splitlines())
     if changed - set(JAVA):
         raise ValueError(f"Unverified Java changes in baseline: {sorted(changed - set(JAVA))}")
     if not changed:

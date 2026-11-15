@@ -1,3 +1,4 @@
+mod firing;
 use super::window_memberships::{persisted_key_group, WindowStateCodec};
 use super::{
     checkpoint_files, copy_checkpoint_db, merged_timer_deadline, multi_get_pinned, open_shared_db,
@@ -433,101 +434,18 @@ impl RocksWindowAggStore {
         watermark: i64,
         calendar: Option<&crate::window_calendar::WindowCalendar>,
     ) -> Result<Vec<StoredWindowGroup>, DataFusionError> {
-        if calendar.is_none()
-            && self.next_end_known
-            && self.next_exclusive_end.is_none_or(|end| end > watermark)
-        {
-            return Ok(Vec::new());
-        }
-        let lower_end = (calendar.is_none() && self.next_end_known)
-            .then_some(self.next_exclusive_end)
-            .flatten();
-        self.next_end_known = false;
-        let mut closed: Vec<(Box<[u8]>, i64, Box<[u8]>)> = Vec::new();
-        let mut candidates: Vec<(Box<[u8]>, Box<[u8]>, i64)> = Vec::new();
-        self.next_exclusive_end = None;
-        let mut writes = FlinkWriteBatch::new(&self.db, self.write_batch_size);
-        let seek_key = |group: i32| {
-            let mut start = group.to_be_bytes().to_vec();
-            if let Some(end) = lower_end {
-                start.extend_from_slice(&biased_window_end(end));
-            }
-            start
-        };
-        let mut reader = self.db.raw_iterator();
-        reader.seek(seek_key(*self.key_groups.start()));
-        while reader.valid() {
-            super::database::check_cancelled()?;
-            let key = reader.key().unwrap();
-            if key.len() < 4 {
-                break;
-            }
-            let group = i32::from_be_bytes(key[..4].try_into().unwrap());
-            if !self.key_groups.contains(&group) {
-                break;
-            }
-            if key.len() < KEY_PREFIX_LEN {
-                reader.next();
-                continue;
-            }
-            let end = window_end_from(&key[4..KEY_PREFIX_LEN]);
-            if calendar.is_some() {
-                candidates.push((key.into(), reader.value().unwrap().into(), end));
-            } else if lower_end.is_some_and(|lower| end < lower) {
-                reader.seek(seek_key(group));
-                continue;
-            } else if end > watermark {
-                self.next_exclusive_end =
-                    Some(self.next_exclusive_end.map_or(end, |next| next.min(end)));
-                let Some(next) = group.checked_add(1) else {
-                    break;
-                };
-                reader.seek(seek_key(next));
-                continue;
-            } else {
-                let value = reader.value().unwrap();
-                let start = i64::from_le_bytes(value[..8].try_into().expect("window start"));
-                writes.delete(key)?;
-                closed.push((key.into(), start, value[8..].into()));
-            }
-            reader.next();
-        }
-        reader.status().map_err(re)?;
-        let deadlines = calendar
-            .map(|calendar| calendar.end_thresholds(candidates.iter().map(|(_, _, end)| *end)));
-        if let Some(deadlines) = &deadlines {
-            self.next_exclusive_end = deadlines
-                .values()
-                .filter(|&&end| end > watermark)
-                .min()
-                .copied();
-            for (key, value, end) in candidates {
-                if deadlines[&end] > watermark {
-                    continue;
-                }
-                let start = i64::from_le_bytes(value[..8].try_into().expect("window start"));
-                writes.delete(&key)?;
-                closed.push((key, start, value[8..].into()));
-            }
-        }
-        closed.sort_unstable_by(|a, b| {
-            let a_end = window_end_from(&a.0[4..KEY_PREFIX_LEN]);
-            let b_end = window_end_from(&b.0[4..KEY_PREFIX_LEN]);
-            let left = deadlines.as_ref().map_or(a_end, |ends| ends[&a_end]);
-            let right = deadlines.as_ref().map_or(b_end, |ends| ends[&b_end]);
-            (left, a_end, &a.0[KEY_PREFIX_LEN..]).cmp(&(right, b_end, &b.0[KEY_PREFIX_LEN..]))
-        });
-        let owners = if self.state_codec.has_memberships() {
-            closed.iter().map(|row| row.0.clone()).collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        let groups = self.into_groups(closed, false)?;
-        for owner in owners {
-            self.state_codec.delete_owner_into(&mut writes, &owner)?;
-        }
-        writes.finish()?;
-        self.next_end_known = calendar.is_none();
+        let mut groups = Vec::new();
+        self.visit_closed_batches(
+            watermark,
+            calendar,
+            None,
+            1024,
+            4 * 1024 * 1024,
+            &mut |batch| {
+                groups.extend(batch);
+                Ok(())
+            },
+        )?;
         Ok(groups)
     }
 

@@ -15,6 +15,8 @@ one warmup and three rotating stock/previous/native trials, four source/sink tas
 heap state and mini-batching off. It restores candidate sources and deletes runtime
 tables even after failure. The workflow artifact retains every observation and log.
 This focused comparison is separate from the complete four-configuration matrix.
+The Java-only runner follows the module-owned core sources and rejects unlisted
+core, Hudi or Parquet changes before replacing any source files.
 
 The same comparison can run on an otherwise idle developer machine using
 `python3 bin/bench-hudi-java.py --baseline FULL_BASELINE_SHA --output NEW_DIRECTORY`
@@ -52,6 +54,11 @@ the fixed matrix above; the timeout does not exclude slow controls or partial ru
 
 ## Current hosted qualification (partial)
 
+These cohorts retain their actual source commits and the native tree measured
+with `866620764`. Subsequent integration of upstream's bounded window output and
+resource ownership is outside these timings; do not treat them as measurements
+of that newer candidate.
+
 Both post-optimization two-million-event configurations with **mini-batching on**
 have passed: heap and RocksDB. Each retains all 198 timings and the exact Q7
 stock planner exclusion. Geometric means of median speedups across 22 timed
@@ -63,8 +70,18 @@ queries are:
 | rocksdb | 1.32× | 8.10× | 17/22 |
 
 The two mini-batching-off configurations reached the original three-hour job
-limit and retain partial diagnostics; they have not qualified. Their retries use
-the longer limit and retain the two successful configurations. This is not a
+limit and retain partial diagnostics; they have not qualified. In the
+[targeted retry](https://github.com/jordepic/StreamFusion-contrib/actions/runs/43650417787),
+RocksDB/off failed full-value validation for Q10's Hudi-disabled SF control on
+trial 1: 1,696,199 output rows versus 1,840,000 stock rows. It retains 66 timings
+and Q7's exclusion as diagnostics, not qualification. Heap/off remains running.
+The [compact failure record](hudi-q10-validation-20261115.json) records exact
+source/library hashes, resources and the previous successful Q10 trial. Its
+[raw report/log archive](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-q10-failure-20261115-5cf84474a)
+and all four members were independently downloaded and hash-verified.
+The harness now records per-file physical row counts and the Hudi timeline on
+validation failure, before deleting runtime tables. Query/data/resource settings,
+timing boundaries and strict output comparison are unchanged. This is not a
 complete matrix or a measured before/after comparison with the earlier heap
 runs. Compare engines within each configuration: these are isolated Linux
 x86-64 runners with four available processors, about 15.6 GiB physical memory

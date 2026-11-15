@@ -17,7 +17,10 @@ remapped once per input schema. The export wrapper borrows the original vectors;
 it does not copy payloads or own their release. JVM-bound programs retain their
 original positional schema. This avoids exporting unused wide structs when a
 columnar watermark assigner hides the source from planner projection pushdown.
-The existing Rust projection-before-filter path remains unchanged.
+Input and callback tags use the shared generated expression protocol. Compiled
+handles register with the task's resource scope immediately after acquisition,
+including failures before the first result. The existing Rust
+projection-before-filter path remains unchanged.
 
 An empty Calc result is closed at the operator boundary. It does not enter downstream
 window/exchange operators, where an empty fragment would still allocate transport and

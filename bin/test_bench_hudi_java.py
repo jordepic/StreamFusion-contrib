@@ -27,6 +27,14 @@ class HudiJavaComparisonTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "identical native inputs"):
                 bench.compare(args)
 
+    def test_unlisted_core_or_parquet_changes_fail_before_mutating_sources(self):
+        args = argparse.Namespace(baseline="a" * 40, queries="q8", rows=200_000, pairs=1)
+        for path in ["streamfusion-core/src/main/java/tech/streamfusion/Native.java",
+                     "streamfusion-parquet/src/main/java/tech/streamfusion/parquet/ParquetCodec.java"]:
+            with mock.patch.object(bench, "git", side_effect=["", "b" * 40, "", path]):
+                with self.assertRaisesRegex(ValueError, "Unverified Java changes"):
+                    bench.compare(args)
+
     def test_failed_maven_restores_candidate_and_removes_runtime_data(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -42,7 +50,7 @@ class HudiJavaComparisonTest(unittest.TestCase):
             def git(*args):
                 if args[0] == "rev-parse":
                     return "b" * 40
-                if args[:4] == ("diff", "--name-only", "a" * 40, "b" * 40) and args[-2:] == ("src/main", "streamfusion-hudi/src/main"):
+                if args[:4] == ("diff", "--name-only", "a" * 40, "b" * 40) and args[-len(bench.PRODUCTION):] == bench.PRODUCTION:
                     return "\n".join(bench.JAVA)
                 return ""
 

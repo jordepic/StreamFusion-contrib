@@ -530,12 +530,13 @@ have geometric means of median speedups of **1.27× stock / 10.28× previous
 StreamFusion** with heap state and **1.32× / 8.10×** with RocksDB. Native medians
 beat stock on 17 of 22 timed queries in each configuration; Q5/Q8/Q11/Q13/Q14
 retain substantial stock losses. Both mini-batching-off configurations hit their
-original three-hour limit and are being retried, so the full matrix remains
+original three-hour limit. The RocksDB/off retry failed Q10 output-count parity
+in the Hudi-disabled SF control; heap/off remains running. The full matrix remains
 incomplete. Compare engines within each configuration; different runner CPU
 models prevent a causal backend or before/after comparison. Full-value checks,
 processing-time exceptions, all trials/ranges, earlier baselines, profiling evidence
 and host memory context are recorded on that page. These are complete-job timings,
-not sustained streaming throughput.
+not sustained streaming throughput, and precede the latest upstream state refactor.
 
 ## Historical Nexmark report review (2026-09-08)
 

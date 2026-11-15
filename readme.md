@@ -241,10 +241,11 @@ uses the same two-million-event corpus and query SQL with a COW source and
 append/MOR sinks. Completed Linux runs with mini-batching on have geometric means
 of median speedups over stock Flink of **1.27× with heap state** and **1.32× with
 RocksDB**, beating stock on 17 of 22 timed queries in each configuration. Several
-window and lookup queries still regress substantially. The mini-batching-off
-configurations reached their original three-hour limit and are being retried;
-the full matrix remains incomplete. The linked report retains all trials, ranges,
-fallback exclusions, earlier baselines and profiling evidence.
+window and lookup queries still regress substantially. Mini-batching-off
+qualification remains incomplete: a retry exposed a Q10 row-count failure in the
+Hudi-disabled SF control. The linked report retains all trials, ranges,
+fallback exclusions, earlier baselines and profiling evidence. These measurements
+precede the latest upstream state refactor.
 
 ## Related work
 
