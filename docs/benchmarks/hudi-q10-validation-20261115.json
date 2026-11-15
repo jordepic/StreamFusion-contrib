@@ -152,6 +152,16 @@
       "wall/monotonic clock gaps below one second"
     ],
     "power_guard": "caffeinate -is",
-    "interpretation": "Did not reproduce on this host and newer integrated source. Does not explain or fix the archived hosted mismatch; no full-matrix or performance qualification claim."
+    "interpretation": "Did not reproduce on this host and newer integrated source. Does not explain or fix the archived hosted mismatch; no full-matrix or performance qualification claim.",
+    "raw_evidence": {
+      "url": "https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-integration-20261115-bf877576f",
+      "bundle": {
+        "path": "hudi-integration-evidence.tar.gz",
+        "bytes": 55642,
+        "sha256": "f3750f762d9a36c78fe8b924e23bd95d0d534ada49390cc4bb9971035f7fc4b2"
+      },
+      "files": 23,
+      "verification": "Independent download; bundle and all23member sizes/hashes verified before raw-log cleanup."
+    }
   }
 }

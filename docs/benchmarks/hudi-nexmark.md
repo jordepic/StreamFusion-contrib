@@ -87,7 +87,9 @@ limit and retain partial diagnostics; they have not qualified. In the
 [targeted retry](https://github.com/jordepic/StreamFusion-contrib/actions/runs/43650417787),
 RocksDB/off failed full-value validation for Q10's Hudi-disabled SF control on
 trial 1: 1,696,199 output rows versus 1,840,000 stock rows. It retains 66 timings
-and Q7's exclusion as diagnostics, not qualification. Heap/off remains running.
+and Q7's exclusion as diagnostics, not qualification. Heap/off was cancelled when
+upstream's new native implementation superseded that source; its 153 timings and
+Q7 exclusion are also diagnostic only, without a final native-cleanup witness.
 The [compact failure record](hudi-q10-validation-20261115.json) records exact
 source/library hashes, resources and the previous successful Q10 trial. Its
 [raw report/log archive](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-q10-failure-20261115-5cf84474a)
@@ -107,6 +109,10 @@ four source/sink tasks. Rust footers and final resource cleanup passed. It did
 not reproduce the archived hosted mismatch on that host and newer source; the
 failure remains unresolved. This does not qualify the full matrix or establish
 integrated-candidate speedups.
+The [integration evidence archive](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-integration-20261115-bf877576f)
+retains the superseded heap/off snapshot separately from the integrated-source
+Q10 repeat and local validation logs. Its bundle and all 23 members were
+independently downloaded and verified before local raw-log cleanup.
 
 The [original campaign archive](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-matrix-attempt1-20261114-866620764)
 preserves all four raw logs/reports and terminal timeout evidence. Its manifest

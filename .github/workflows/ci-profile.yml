@@ -12,7 +12,7 @@ on:
         description: 'Hudi benchmark: full Java-only baseline SHA with identical native inputs'
         type: string
       hudi_rows:
-        description: 'Hudi benchmark events per trial (up to 2000000)'
+        description: 'Java-only comparison events per trial; full matrix and diagnostics use 2000000'
         type: string
         default: '200000'
       hudi_queries:
