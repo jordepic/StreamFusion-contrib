@@ -126,5 +126,32 @@
     },
     "files": 4,
     "verification": "Independent download; bundle and all4member sizes/hashes checked before local raw-log cleanup."
+  },
+  "post_integration_reproduction": {
+    "status": "diagnostic-passed; original failure unresolved",
+    "source": "bf877576f92e605c03994b767a27a6a4dd52638a",
+    "native_tree": "54cfc7608463ba3a18aefac0d98764fcbfa88c4c",
+    "libraries_sha256": {
+      "libstreamfusion.dylib": "72f7ead6366250f881b321073250e642f86d06de6d3f665174bc1aecc5a13e22",
+      "libstreamfusion_parquet.dylib": "8b87c89e15b90d7afe509d0ccdcf61eda5f92f3b7ee028630e579907a220e2db"
+    },
+    "scope": "Focused unchanged Q10 correctness reproduction only; does not qualify the full matrix or integrated-candidate speedups",
+    "rows": 2000000,
+    "source_and_sink_tasks": 4,
+    "backend_configuration": "rocksdb",
+    "mini_batch": false,
+    "warmups": 1,
+    "trials_per_engine": 3,
+    "completed_timing_identities": 9,
+    "all_output_rows": 1840000,
+    "validated": [
+      "full-value multiset for each stock/previous/native trial",
+      "all four physical sink partitions",
+      "Rust footers for native user payloads",
+      "zero final native handles and memory reservations",
+      "wall/monotonic clock gaps below one second"
+    ],
+    "power_guard": "caffeinate -is",
+    "interpretation": "Did not reproduce on this host and newer integrated source. Does not explain or fix the archived hosted mismatch; no full-matrix or performance qualification claim."
   }
 }

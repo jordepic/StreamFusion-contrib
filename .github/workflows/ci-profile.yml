@@ -6,7 +6,7 @@ on:
       suite:
         description: 'Paired JVM comparison to run'
         type: choice
-        options: [runtime, runtime-parallel, runtime-jfr, canonical, native-only, runtime-hotspots, canonical-setup, lake-setup, hudi-benchmark]
+        options: [runtime, runtime-parallel, runtime-jfr, canonical, native-only, runtime-hotspots, canonical-setup, lake-setup, hudi-native, hudi-diagnostic, hudi-benchmark]
         default: runtime
       hudi_baseline:
         description: 'Hudi benchmark: full Java-only baseline SHA with identical native inputs'
@@ -18,7 +18,7 @@ on:
       hudi_queries:
         description: 'Hudi benchmark unchanged query selection'
         type: choice
-        options: ['q8,q12', q8, q12]
+        options: ['q8,q12', q8, q10, q12]
         default: 'q8,q12'
       hudi_full_matrix:
         description: 'Run the full two-million-event, four-configuration Hudi matrix'
@@ -30,7 +30,7 @@ on:
         options: [all, 'off', memory-false, memory-true, rocksdb-false, rocksdb-true]
         default: all
       native_run:
-        description: 'Native producer run ID; full Hudi matrix requires a successful release benchmark'
+        description: 'Native producer run ID; full Hudi matrix requires a successful Hudi release producer'
         type: string
       lake_module:
         description: 'Lake module for the setup diagnostic (Hudi uses Flink 1.18)'
@@ -80,7 +80,7 @@ concurrency:
 
 jobs:
   hudi-benchmark:
-    if: inputs.suite == 'hudi-benchmark' && !inputs.hudi_full_matrix && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
+    if: (inputs.suite == 'hudi-native' || (inputs.suite == 'hudi-benchmark' && !inputs.hudi_full_matrix)) && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -95,6 +95,7 @@ jobs:
         with:
           filter: blob:none
       - name: Check comparison failure handling and source compatibility
+        if: inputs.suite == 'hudi-benchmark'
         run: |
           python3 -m unittest discover -s bin -p test_bench_hudi_java.py
           python3 bin/bench-hudi-java.py --baseline "$BASELINE" --verify-only \
@@ -126,12 +127,13 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Alternate baseline and candidate on the same isolated runner
+        if: inputs.suite == 'hudi-benchmark'
         run: >-
           python3 bin/bench-hudi-java.py --baseline "$BASELINE"
           --rows "$BENCH_ROWS" --queries "$BENCH_QUERIES"
           --output "$RUNNER_TEMP/hudi-benchmark"
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && inputs.suite == 'hudi-benchmark'
         with:
           name: hudi-focused-${{ github.sha }}
           path: |
@@ -152,7 +154,7 @@ jobs:
           PY
 
   hudi-matrix-setup:
-    if: inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
+    if: ((inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix) || inputs.suite == 'hudi-diagnostic') && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -161,6 +163,7 @@ jobs:
     env:
       NATIVE_RUN: ${{ inputs.native_run }}
       HUDI_CONFIGURATIONS: ${{ inputs.hudi_configurations || 'all' }}
+      HUDI_DIAGNOSTIC: ${{ inputs.suite == 'hudi-diagnostic' && 'true' || 'false' }}
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@v6
@@ -176,7 +179,10 @@ jobs:
           python3 - <<'PY_MATRIX'
           import json, os, runpy
           select = runpy.run_path('bin/bench-hudi-matrix.py')['configurations']
-          matrix = {'include': select(os.environ['HUDI_CONFIGURATIONS'])}
+          pairs = select(os.environ['HUDI_CONFIGURATIONS'])
+          if os.environ['HUDI_DIAGNOSTIC'] == 'true' and len(pairs) != 1:
+              raise ValueError('A focused Hudi diagnostic requires one explicit configuration')
+          matrix = {'include': pairs}
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('matrix=' + json.dumps(matrix) + '\n')
           PY_MATRIX
@@ -188,8 +194,8 @@ jobs:
 
   hudi-matrix:
     needs: hudi-matrix-setup
-    if: inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
-    name: Hudi Nexmark | ${{ matrix.backend }} | mini=${{ matrix.mini_batch }}
+    if: ((inputs.suite == 'hudi-benchmark' && inputs.hudi_full_matrix) || inputs.suite == 'hudi-diagnostic') && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
+    name: ${{ inputs.suite == 'hudi-diagnostic' && 'Hudi diagnostic' || 'Hudi Nexmark' }} | ${{ matrix.backend }} | mini=${{ matrix.mini_batch }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
@@ -201,6 +207,7 @@ jobs:
       NATIVE_RUN: ${{ inputs.native_run }}
       BENCH_BACKEND: ${{ matrix.backend }}
       BENCH_MINI_BATCH: ${{ matrix.mini_batch }}
+      HUDI_DIAGNOSTIC_QUERIES: ${{ inputs.suite == 'hudi-diagnostic' && inputs.hudi_queries || '' }}
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@v6
@@ -218,15 +225,16 @@ jobs:
           run-id: ${{ inputs.native_run }}
           github-token: ${{ github.token }}
           path: native/target/release
-      - name: Run all unchanged queries and three engines in this configuration
+      - name: ${{ inputs.suite == 'hudi-diagnostic' && 'Run selected unchanged queries as a correctness diagnostic' || 'Run all unchanged queries and three engines in this configuration' }}
         run: >-
           python3 bin/bench-hudi-matrix.py --backend "$BENCH_BACKEND"
           --mini-batch "$BENCH_MINI_BATCH" --native-producer-run "$NATIVE_RUN"
+          --diagnostic-queries "$HUDI_DIAGNOSTIC_QUERIES"
           --output "$RUNNER_TEMP/hudi-matrix"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: hudi-matrix-${{ matrix.backend }}-${{ matrix.mini_batch }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: ${{ inputs.suite == 'hudi-diagnostic' && 'hudi-diagnostic' || 'hudi-matrix' }}-${{ matrix.backend }}-${{ matrix.mini_batch }}-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/hudi-matrix/summary.json
             ${{ runner.temp }}/hudi-matrix/result.json

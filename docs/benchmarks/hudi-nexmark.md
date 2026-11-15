@@ -17,6 +17,7 @@ tables even after failure. The workflow artifact retains every observation and l
 This focused comparison is separate from the complete four-configuration matrix.
 The Java-only runner follows the module-owned core sources and rejects unlisted
 core, Hudi or Parquet changes before replacing any source files.
+Q10 is also available for a Java-only comparison with matching native inputs.
 
 The same comparison can run on an otherwise idle developer machine using
 `python3 bin/bench-hudi-java.py --baseline FULL_BASELINE_SHA --output NEW_DIRECTORY`
@@ -26,8 +27,12 @@ to a supported JDK and prevent system sleep for local timings. The
 retains the local diagnostic and excluded contended attempts.
 
 For complete qualification, select suite `hudi-benchmark` with
-`hudi_full_matrix=true` and set `native_run` to a successful focused release
-producer. The full mode uses two million events and every unchanged query in four
+`hudi_full_matrix=true` and set `native_run` to a successful Hudi release
+producer. Suite `hudi-native` builds and publishes only the two release libraries
+using the same build/cache steps; it needs no Java comparison baseline and makes
+no benchmark or correctness qualification claim. Use it when native sources have
+changed. A successful focused `hudi-benchmark` run can also supply those libraries.
+The full mode uses two million events and every unchanged query in four
 isolated jobs: heap/RocksDB × mini-batching off/on. Native source/toolchain inputs
 must match the producer, its release-build step must have succeeded, and its
 library artifact must still be available. Each job downloads those same libraries
@@ -51,6 +56,14 @@ launcher forwards the existing per-query/engine progress lines to the job consol
 while retaining the complete byte-for-byte Maven log, including failure output.
 The selected queries, warmups, trials, resources and measured boundaries remain
 the fixed matrix above; the timeout does not exclude slow controls or partial runs.
+
+For a focused correctness reproduction, select suite `hudi-diagnostic`, one
+explicit `hudi_configurations` value such as `rocksdb-false`, `hudi_queries=q10`
+and a source-compatible `native_run`. This reuses the same two-million-event
+runner, resources, warmup and three-engine rotating trials for the selected
+unchanged queries. It publishes `hudi-diagnostic-*` artifacts and records
+`diagnostic-passed`; it cannot qualify a complete configuration. The default full
+matrix still requires all 198 timing identities and Q7's exact exclusion.
 
 ## Current hosted qualification (partial)
 
@@ -87,6 +100,13 @@ runs. Compare engines within each configuration: these are isolated Linux
 x86-64 runners with four available processors, about 15.6 GiB physical memory
 and JDK 17.0.21; heap ran on AMD EPYC 9V74 and RocksDB on AMD EPYC 9V45.
 Their absolute times do not isolate a backend or mini-batch effect.
+
+A focused local repeat after upstream integration passed all nine timed Q10
+identities and full output values, plus its warmup, at two million events and
+four source/sink tasks. Rust footers and final resource cleanup passed. It did
+not reproduce the archived hosted mismatch on that host and newer source; the
+failure remains unresolved. This does not qualify the full matrix or establish
+integrated-candidate speedups.
 
 The [original campaign archive](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-matrix-attempt1-20261114-866620764)
 preserves all four raw logs/reports and terminal timeout evidence. Its manifest
