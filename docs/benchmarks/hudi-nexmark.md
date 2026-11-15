@@ -109,6 +109,12 @@ four source/sink tasks. Rust footers and final resource cleanup passed. It did
 not reproduce the archived hosted mismatch on that host and newer source; the
 failure remains unresolved. This does not qualify the full matrix or establish
 integrated-candidate speedups.
+The same integration passes the full default upstream Hudi replay in both
+stock/native modes: 349 enabled cases and one unchanged upstream skip per mode,
+with all native-work/fallback contracts intact. The
+[source-pinned local upstream report](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-upstream-20261115-bf877576f)
+is independently archived and verified; it does not replace hosted merge gates
+or complete the Nexmark matrix.
 The [integration evidence archive](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-integration-20261115-bf877576f)
 retains the superseded heap/off snapshot separately from the integrated-source
 Q10 repeat and local validation logs. Its bundle and all 23 members were
