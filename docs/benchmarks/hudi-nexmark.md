@@ -544,7 +544,11 @@ state code. [All 18 timings, source trees, library hashes and CPU diagnostic](hu
 are retained. A separate smoke checks actual RocksDB databases for all three engines.
 All 99 affected native window/store tests pass, including canonical state transfer.
 These smaller complete jobs do not establish the two-million-event result or
-sustained throughput; those checks and full-matrix qualification remain pending.
+sustained throughput. The later full Linux matrix above completes all four
+configurations at its recorded source/native trees, including the subsequent
+bounded-output integration. Q5 remains slower than stock in every configuration;
+the combined results do not isolate this deadline optimization or establish
+sustained throughput.
 
 The subsequent cursor revision visits populated key groups through one iterator,
 seeks from the earliest live end, and skips accumulator namespaces when loading
