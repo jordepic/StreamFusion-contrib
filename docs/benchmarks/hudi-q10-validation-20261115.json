@@ -116,7 +116,7 @@
     "Native q10 trial1 parity was not reached after the previous-control assertion failed.",
     "Partial query results do not qualify a complete configuration."
   ],
-  "next_step": "Complete the current-source four-configuration matrix with strict full-value validation and per-file/commit failure diagnostics. The original intermittent mismatch remains unresolved; passing repeats do not prove its cause or a fix.",
+  "next_step": "Final exact-head hosted qualification after upstream integration. Preserve the original16d mismatch as unexplained historical evidence; the completed current-source campaign passes all36 Q10 timing identities without claiming its cause or a fix.",
   "raw_evidence": {
     "url": "https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-q10-failure-20261115-5cf84474a",
     "bundle": {
@@ -383,6 +383,27 @@
       "stock": 20027.062748,
       "previous": 43366.171751,
       "native": 1454.503408
+    }
+  },
+  "full_matrix_reproduction": {
+    "status": "passed on source67d03a0f7; original failure unexplained",
+    "source": "67d03a0f775e7ea8d5339c9bfd8bdc316778d23d",
+    "native_tree": "54cfc7608463ba3a18aefac0d98764fcbfa88c4c",
+    "workflow_run": "https://github.com/jordepic/StreamFusion-contrib/actions/runs/43680106018",
+    "completed_configurations": 4,
+    "timed_observations": 792,
+    "q10_timed_identities": 36,
+    "all_q10_output_rows": 1840000,
+    "q10_validation": "full-value multiset in every stock/previous/native trial",
+    "raw_evidence": {
+      "url": "https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-matrix-20261115-67d03a0f7",
+      "bundle": {
+        "path": "hudi-full-matrix.tar.gz",
+        "bytes": 136335,
+        "sha256": "ac00363b0aed7c9ab92614d4b4f1c5daac78162736e6d06c771ca6c52bfdf91f"
+      },
+      "files": 16,
+      "verification": "Independent download; bundle and all16 member sizes/hashes checked before raw-log cleanup."
     }
   }
 }
