@@ -171,8 +171,9 @@ class NexmarkHudiBenchmark {
               } catch (Exception | AssertionError failure) {
                 for (var entry : results.entrySet()) {
                   var result = entry.getValue();
+                  var details = new LinkedHashMap<String, Object>();
+                  failureDiagnostics.add(details);
                   try {
-                    var details = new LinkedHashMap<String, Object>();
                     details.put("query", query.label);
                     details.put("engine", entry.getKey());
                     details.put("backend", backend);
@@ -191,6 +192,7 @@ class NexmarkHudiBenchmark {
                             .map(Object::toString)
                             .collect(Collectors.toList()));
                     var commits = new LinkedHashMap<String, Long>();
+                    details.put("committed_rows_by_instant", commits);
                     for (var instant :
                         timeline.getCommitsTimeline().filterCompletedInstants()
                             .getInstantsAsStream().collect(Collectors.toList())) {
@@ -198,11 +200,10 @@ class NexmarkHudiBenchmark {
                           instant.requestedTime(),
                           timeline.readCommitMetadata(instant).fetchTotalRecordsWritten());
                     }
-                    details.put("committed_rows_by_instant", commits);
-                    failureDiagnostics.add(details);
                     System.out.println(
                         "[hudi-nexmark] failure diagnostics " + JSON.writeValueAsString(details));
                   } catch (Exception diagnosticFailure) {
+                    details.put("diagnostic_error", diagnosticFailure.toString());
                     failure.addSuppressed(diagnosticFailure);
                   }
                 }

@@ -95,7 +95,9 @@ source/library hashes, resources and the previous successful Q10 trial. Its
 [raw report/log archive](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-q10-failure-20261115-5cf84474a)
 and all four members were independently downloaded and hash-verified.
 The harness now records per-file physical row counts and the Hudi timeline on
-validation failure, before deleting runtime tables. Query/data/resource settings,
+validation failure, before deleting runtime tables. If metadata inspection fails,
+the report retains collected counts and the diagnostic error alongside the
+original assertion. Query/data/resource settings,
 timing boundaries and strict output comparison are unchanged. This is not a
 complete matrix or a measured before/after comparison with the earlier heap
 runs. Compare engines within each configuration: these are isolated Linux
