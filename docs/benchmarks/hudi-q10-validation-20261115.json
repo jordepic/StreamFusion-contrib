@@ -116,7 +116,7 @@
     "Native q10 trial1 parity was not reached after the previous-control assertion failed.",
     "Partial query results do not qualify a complete configuration."
   ],
-  "next_step": "Reproduce unchanged Q10 at2M events/P4/RocksDB/off with strict full-value validation and per-file/commit diagnostics; retain the failure even if a later repeat passes.",
+  "next_step": "Complete the current-source four-configuration matrix with strict full-value validation and per-file/commit failure diagnostics. The original intermittent mismatch remains unresolved; passing repeats do not prove its cause or a fix.",
   "raw_evidence": {
     "url": "https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-q10-failure-20261115-5cf84474a",
     "bundle": {
@@ -162,6 +162,227 @@
       },
       "files": 23,
       "verification": "Independent download; bundle and all23member sizes/hashes verified before raw-log cleanup."
+    }
+  },
+  "linux_reproduction": {
+    "status": "diagnostic-passed",
+    "commit": "480eefc2a32f9e17f30ea89cf4b1fbd3ca1b7373",
+    "native_tree": "54cfc7608463ba3a18aefac0d98764fcbfa88c4c",
+    "native_producer_run": 43663389459,
+    "libraries_sha256": {
+      "libstreamfusion.so": "44edd010401f1ad0a2980429abf14215ca99d262ef711a43124c96739a9bddff",
+      "libstreamfusion_parquet.so": "7fcc7ffecd0e4a15538ccd5cd51ee58931d7c0482f1c1a5ffb6181326be22775"
+    },
+    "platform": "Linux-7.0.0-1014-aws-x86_64-with-glibc2.39",
+    "processors": 4,
+    "backend": "rocksdb",
+    "mini_batch": false,
+    "scope": "Focused correctness diagnostic; not full-matrix qualification",
+    "diagnostic_queries": [
+      "q10"
+    ],
+    "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+    "physical_memory_bytes": 16464293888,
+    "exit_code": 0,
+    "report": {
+      "status": "passed",
+      "failure_diagnostics": [],
+      "rows": 2000000,
+      "input_bids": 1840000,
+      "parallelism": 4,
+      "source_partitions": 4,
+      "sink_partition_modulus": 4,
+      "checkpoint_ms": 1000,
+      "warmups": 1,
+      "runs": 3,
+      "object_reuse": true,
+      "jdk": "17.0.21+9",
+      "architecture": "amd64",
+      "available_processors": 4,
+      "heap_max_bytes": 8589934592,
+      "native_task_off_heap_capacity_bytes": 51539607552,
+      "state_backend_checks": [],
+      "observations": [
+        {
+          "query": "q10",
+          "engine": "stock",
+          "backend": "rocksdb",
+          "mini_batch": false,
+          "trial": 0,
+          "milliseconds": 20132.276479,
+          "wall_milliseconds": 20132.280864,
+          "started_at_utc": "2026-11-15T02:30:35.982766390Z",
+          "output_rows": 1840000,
+          "sink_partitions": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "validation": "full-value multiset"
+        },
+        {
+          "query": "q10",
+          "engine": "previous",
+          "backend": "rocksdb",
+          "mini_batch": false,
+          "trial": 0,
+          "milliseconds": 43366.171751,
+          "wall_milliseconds": 43366.175268,
+          "started_at_utc": "2026-11-15T02:31:12.621693002Z",
+          "output_rows": 1840000,
+          "sink_partitions": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "validation": "full-value multiset"
+        },
+        {
+          "query": "q10",
+          "engine": "native",
+          "backend": "rocksdb",
+          "mini_batch": false,
+          "trial": 0,
+          "milliseconds": 1454.503408,
+          "wall_milliseconds": 1454.507279,
+          "started_at_utc": "2026-11-15T02:32:13.850478465Z",
+          "output_rows": 1840000,
+          "sink_partitions": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "validation": "full-value multiset"
+        },
+        {
+          "query": "q10",
+          "engine": "native",
+          "backend": "rocksdb",
+          "mini_batch": false,
+          "trial": 1,
+          "milliseconds": 1518.082516,
+          "wall_milliseconds": 1518.086508,
+          "started_at_utc": "2026-11-15T02:32:32.304670746Z",
+          "output_rows": 1840000,
+          "sink_partitions": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "validation": "full-value multiset"
+        },
+        {
+          "query": "q10",
+          "engine": "stock",
+          "backend": "rocksdb",
+          "mini_batch": false,
+          "trial": 1,
+          "milliseconds": 19719.451446,
+          "wall_milliseconds": 19719.455163,
+          "started_at_utc": "2026-11-15T02:32:49.666128834Z",
+          "output_rows": 1840000,
+          "sink_partitions": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "validation": "full-value multiset"
+        },
+        {
+          "query": "q10",
+          "engine": "previous",
+          "backend": "rocksdb",
+          "mini_batch": false,
+          "trial": 1,
+          "milliseconds": 43452.324338,
+          "wall_milliseconds": 43452.327955,
+          "started_at_utc": "2026-11-15T02:33:25.606171984Z",
+          "output_rows": 1840000,
+          "sink_partitions": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "validation": "full-value multiset"
+        },
+        {
+          "query": "q10",
+          "engine": "previous",
+          "backend": "rocksdb",
+          "mini_batch": false,
+          "trial": 2,
+          "milliseconds": 43214.361804,
+          "wall_milliseconds": 43214.365298,
+          "started_at_utc": "2026-11-15T02:34:28.554554012Z",
+          "output_rows": 1840000,
+          "sink_partitions": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "validation": "full-value multiset"
+        },
+        {
+          "query": "q10",
+          "engine": "native",
+          "backend": "rocksdb",
+          "mini_batch": false,
+          "trial": 2,
+          "milliseconds": 1337.967493,
+          "wall_milliseconds": 1337.970528,
+          "started_at_utc": "2026-11-15T02:35:29.458205771Z",
+          "output_rows": 1840000,
+          "sink_partitions": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "validation": "full-value multiset"
+        },
+        {
+          "query": "q10",
+          "engine": "stock",
+          "backend": "rocksdb",
+          "mini_batch": false,
+          "trial": 2,
+          "milliseconds": 20027.062748,
+          "wall_milliseconds": 20027.066251,
+          "started_at_utc": "2026-11-15T02:35:46.531841757Z",
+          "output_rows": 1840000,
+          "sink_partitions": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "validation": "full-value multiset"
+        }
+      ]
+    },
+    "workflow_run": "https://github.com/jordepic/StreamFusion-contrib/actions/runs/43665309971",
+    "interpretation": "Current-source Linux repeat passes all nine timed identities and full output values. Does not explain or fix the archived failure, qualify a full configuration, or establish a before/after performance comparison.",
+    "raw_evidence": {
+      "url": "https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-q10-linux-20261115-480eefc2a",
+      "bundle": {
+        "path": "hudi-q10-linux-diagnostic.tar.gz",
+        "bytes": 7798,
+        "sha256": "a869af6cd5d6e6c4542b77026e8726132df2422e451262e9bfa3f8c0eebfe1df"
+      },
+      "files": 4,
+      "verification": "Independent download; bundle and all four member sizes/hashes checked before raw-log cleanup."
+    },
+    "medians_ms": {
+      "stock": 20027.062748,
+      "previous": 43366.171751,
+      "native": 1454.503408
     }
   }
 }

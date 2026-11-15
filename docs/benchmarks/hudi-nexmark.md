@@ -111,6 +111,18 @@ four source/sink tasks. Rust footers and final resource cleanup passed. It did
 not reproduce the archived hosted mismatch on that host and newer source; the
 failure remains unresolved. This does not qualify the full matrix or establish
 integrated-candidate speedups.
+The [focused Linux repeat](https://github.com/jordepic/StreamFusion-contrib/actions/runs/43665309971)
+also passes all nine timed Q10 identities and full values at 2M/P4/RocksDB/off,
+with the current source-compatible release libraries, Rust payload footers and
+final native cleanup. Each trial writes all 1,840,000 rows across four sink
+partitions. On that four-processor Intel Xeon 6975P-C runner, median complete-job
+times are 20,027 ms stock, 43,366 ms previous SF and 1,455 ms native. These are
+focused diagnostic observations, not a full configuration or a before/after
+comparison with other hosts. The [structured failure/repeat record](hudi-q10-validation-20261115.json)
+retains all nine timings, ranges, environment and Linux library hashes. Its
+[raw evidence archive](https://github.com/jordepic/StreamFusion-contrib/releases/tag/benchmark-evidence-hudi-q10-linux-20261115-480eefc2a)
+was independently downloaded and verified before local log cleanup. Neither
+passing repeat establishes the cause of the original mismatch; it remains open.
 The same integration passes the full default upstream Hudi replay in both
 stock/native modes: 349 enabled cases and one unchanged upstream skip per mode,
 with all native-work/fallback contracts intact. The
