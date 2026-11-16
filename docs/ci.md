@@ -1733,3 +1733,18 @@ The result includes source and library hashes plus physical-file and commit row
 counts on failure. Successful repeats alone do not establish the original cause.
 Runtime tables and sorter scratch are removed after evidence upload; checkpoint
 data and complete table payloads are excluded from artifacts.
+
+The isolated original-source Q10 probe passed all nine timed trial identities with
+full row parity. The original failure followed earlier queries in the same JVM.
+Select `history=original-prefix` to replay precisely that preceding selection
+(`q0,q1,q2,q3,q4,q7,q8,q9`) before Q10, retaining the original warmup, trial order,
+data, engines and assertions. The stock planner's original Q7 rejection remains
+explicit. This isolates query-history effects without adding the later queries
+or the other backend/mini-batch combinations.
+
+Supply the successful original-source `native_run` to reuse its unexpired release
+artifact. The diagnostic verifies the native tree and producer provenance and
+checks both library byte hashes before staging them. It does not rebuild or upload
+another copy of those libraries. Only the workflow, this note and the failure-only
+benchmark observations may differ from source `5cf84474a`; production inputs and
+the shared SQL, event-generation and multiset-comparison fixtures stay identical.

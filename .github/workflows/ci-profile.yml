@@ -1,11 +1,23 @@
 name: CI startup profile
-run-name: Historical Hudi Q10 correctness reproduction
+run-name: >-
+  ${{ inputs.history == 'original-prefix' && 'Historical Hudi Q10 with original query history'
+      || 'Historical Hudi Q10 correctness reproduction' }}
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      native_run:
+        description: 'Existing successful historical release producer'
+        type: string
+      history:
+        description: 'Query history before Q10 in the same JVM'
+        type: choice
+        options: [isolated, original-prefix]
+        default: isolated
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: hudi-historical-q10-${{ github.ref }}
@@ -15,7 +27,7 @@ jobs:
   historical-q10:
     if: github.repository != 'datafusion-contrib/StreamFusion'
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
@@ -26,7 +38,7 @@ jobs:
       SF_RUNS: '3'
       SF_HUDI_BACKENDS: rocksdb
       SF_HUDI_MINIBATCHES: 'false'
-      SF_MATRIX_QUERIES: q10
+      SF_MATRIX_QUERIES: ${{ inputs.history == 'original-prefix' && 'q0,q1,q2,q3,q4,q7,q8,q9,q10' || 'q10' }}
       SF_OBJECT_REUSE: 'true'
     steps:
       - uses: actions/checkout@v6
@@ -45,7 +57,8 @@ jobs:
           native = '16d4c0052bb61c9a6c783bd03bdafc6c02fe9896'
           def git(*args):
               return subprocess.check_output(['git', *args], text=True).strip()
-          assert git('rev-parse', 'HEAD^') == base
+          if subprocess.run(['git', 'cat-file', '-e', base], capture_output=True).returncode:
+              subprocess.run(['git', 'fetch', '--no-tags', '--filter=blob:none', '--depth=1', 'origin', base], check=True)
           assert git('rev-parse', 'HEAD:native') == native
           allowed = {'.github/workflows/ci-profile.yml', 'docs/ci.md',
                      'streamfusion-hudi/src/nexmark/java/tech/streamfusion/NexmarkHudiBenchmark.java'}
@@ -58,7 +71,8 @@ jobs:
               assert git('rev-parse', base + ':' + name) == git('rev-parse', 'HEAD:' + name)
           result = dict(original_source=base, diagnostic_head=git('rev-parse', 'HEAD'),
                         native_tree=native, fixture_sha256=hashes,
-                        historical_job=132617478396, performance_claim=False)
+                        historical_job=132617478396, performance_claim=False,
+                        selected_queries=os.environ['SF_MATRIX_QUERIES'])
           output = Path(os.environ['RUNNER_TEMP']) / 'hudi-historical/provenance.json'
           output.write_text(json.dumps(result, indent=2) + '\n')
           PYCODE
@@ -69,21 +83,97 @@ jobs:
           java-version: '17.0.21+9'
           cache: maven
       - uses: ./.github/actions/setup-rust
+        if: inputs.native_run == ''
       - uses: Swatinem/rust-cache@v2
+        if: inputs.native_run == ''
         with:
           workspaces: native
           shared-key: release-hudi
       - name: Rebuild only the original core and Parquet release libraries
+        if: inputs.native_run == ''
         run: >-
           cargo build --manifest-path native/Cargo.toml --release --locked --lib
           -p streamfusion -p streamfusion-parquet
           --features streamfusion/mimalloc,streamfusion-parquet/mimalloc --timings
+      - name: Verify an existing original-source release producer
+        if: inputs.native_run != ''
+        id: producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RUN: ${{ inputs.native_run }}
+        run: |
+          python3 - <<'PYCODE'
+          import json
+          import os
+          import re
+          import subprocess
+          run_id = os.environ['NATIVE_RUN']
+          assert run_id.isdigit() and int(run_id) > 0
+          repository = os.environ['GITHUB_REPOSITORY']
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', path], timeout=30))
+          run = api(f'repos/{repository}/actions/runs/{run_id}')
+          assert run['conclusion'] == 'success'
+          sha = run['head_sha']
+          assert re.fullmatch(r'[0-9a-f]{40}', sha)
+          if subprocess.run(['git', 'cat-file', '-e', sha], capture_output=True).returncode:
+              subprocess.run(['git', 'fetch', '--no-tags', '--filter=blob:none', '--depth=1', 'origin', sha], check=True)
+          tree = subprocess.check_output(['git', 'rev-parse', sha + ':native'], text=True).strip()
+          assert tree == '16d4c0052bb61c9a6c783bd03bdafc6c02fe9896'
+          artifacts = api(f'repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+          matches = [a for a in artifacts if a['name'] == 'hudi-historical-native-' + sha and not a['expired']]
+          assert len(matches) == 1
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('artifact=' + str(matches[0]['id']), file=output)
+              print('sha=' + sha, file=output)
+          PYCODE
+      - uses: actions/download-artifact@v5
+        if: inputs.native_run != ''
+        with:
+          artifact-ids: ${{ steps.producer.outputs.artifact }}
+          run-id: ${{ inputs.native_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/hudi-producer
+          merge-multiple: true
+      - name: Stage and verify the exact original release library bytes
+        if: inputs.native_run != ''
+        env:
+          PRODUCER_SHA: ${{ steps.producer.outputs.sha }}
+          NATIVE_RUN: ${{ inputs.native_run }}
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          source = Path(os.environ['RUNNER_TEMP']) / 'hudi-producer'
+          manifests = list(source.rglob('provenance.json'))
+          hashes = list(source.rglob('libraries.sha256'))
+          assert len(manifests) == len(hashes) == 1
+          provenance = json.loads(manifests[0].read_text())
+          assert provenance['diagnostic_head'] == os.environ['PRODUCER_SHA']
+          assert provenance['native_tree'] == '16d4c0052bb61c9a6c783bd03bdafc6c02fe9896'
+          expected = {Path(line.split()[1]).name: line.split()[0] for line in hashes[0].read_text().splitlines()}
+          assert set(expected) == {'libstreamfusion.so', 'libstreamfusion_parquet.so'}
+          destination = Path('native/target/release')
+          destination.mkdir(parents=True, exist_ok=True)
+          for name, digest in expected.items():
+              files = list(source.rglob(name))
+              assert len(files) == 1 and hashlib.sha256(files[0].read_bytes()).hexdigest() == digest
+              shutil.copy2(files[0], destination / name)
+          current = Path(os.environ['RUNNER_TEMP']) / 'hudi-historical/provenance.json'
+          report = json.loads(current.read_text())
+          report['native_producer'] = dict(run=int(os.environ['NATIVE_RUN']), sha=os.environ['PRODUCER_SHA'], libraries_sha256=expected)
+          current.write_text(json.dumps(report, indent=2) + '\n')
+          PYCODE
       - name: Record rebuilt library hashes
         run: |
           sha256sum native/target/release/libstreamfusion.so \
             native/target/release/libstreamfusion_parquet.so \
             > "$RUNNER_TEMP/hudi-historical/libraries.sha256"
       - uses: actions/upload-artifact@v4
+        if: inputs.native_run == ''
         with:
           name: hudi-historical-native-${{ github.sha }}
           path: |
@@ -97,7 +187,7 @@ jobs:
         run: >-
           python3 bin/ci-maven-dependencies.py --profile hudi,flink-1.18,bench,hudi-nexmark
           --projects streamfusion-hudi --also-make
-      - name: Repeat only Q10 with the original three engines and full assertions
+      - name: Run the selected original query history with full assertions
         run: |
           set -o pipefail
           mvn -B -ntp -Phudi,flink-1.18,bench,hudi-nexmark \
@@ -107,7 +197,7 @@ jobs:
             "-Dsf.hudi.benchmark.output=$RUNNER_TEMP/hudi-historical/result.json" \
             "-Dsf.extraJvmArgs=-Djava.library.path=$GITHUB_WORKSPACE/native/target/release -Djava.io.tmpdir=$RUNNER_TEMP/hudi-historical/runtime -Duser.timezone=UTC -Dfile.encoding=UTF-8" \
             2>&1 | tee "$RUNNER_TEMP/hudi-historical/maven.log"
-      - name: Require all nine unchanged Q10 timing identities to validate
+      - name: Require the complete selected query identities to validate
         run: |
           python3 - <<'PYCODE'
           import json
@@ -116,14 +206,17 @@ jobs:
           report = json.loads((Path(os.environ['RUNNER_TEMP']) / 'hudi-historical/result.json').read_text())
           assert report['status'] == 'passed', report
           assert report['rows'] == 2000000 and report['input_bids'] == 1840000
-          observed = report['observations']
-          expected = {(engine, trial) for engine in ('stock', 'previous', 'native') for trial in range(3)}
-          assert len(observed) == 9
-          assert {(row['engine'], row['trial']) for row in observed} == expected
+          observed = [row for row in report['observations'] if 'engine' in row]
+          queries = ['q0', 'q1', 'q2', 'q3', 'q4', 'q8', 'q9', 'q10'] if ',' in os.environ['SF_MATRIX_QUERIES'] else ['q10']
+          expected = {(query, engine, trial) for query in queries for engine in ('stock', 'previous', 'native') for trial in range(3)}
+          assert len(observed) == len(expected)
+          assert {(row['query'], row['engine'], row['trial']) for row in observed} == expected
           for row in observed:
-              assert row['query'] == 'q10' and row['backend'] == 'rocksdb' and not row['mini_batch']
-              assert row['output_rows'] == 1840000 and row['validation'] == 'full-value multiset'
-          print('All nine Q10 identities passed; the historical cause is not established by passing repeats.')
+              assert row['backend'] == 'rocksdb' and not row['mini_batch']
+              assert row['validation'] == 'full-value multiset'
+              if row['query'] == 'q10':
+                  assert row['output_rows'] == 1840000
+          print('Selected query history and all nine Q10 identities passed; passing repeats do not establish the historical cause.')
           PYCODE
       - uses: actions/upload-artifact@v4
         if: always()
@@ -144,4 +237,5 @@ jobs:
           from pathlib import Path
           import shutil
           shutil.rmtree(Path(os.environ['RUNNER_TEMP']) / 'hudi-historical/runtime', ignore_errors=True)
+          shutil.rmtree(Path(os.environ['RUNNER_TEMP']) / 'hudi-producer', ignore_errors=True)
           PYCODE
