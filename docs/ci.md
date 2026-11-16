@@ -1990,6 +1990,14 @@ Python bytecode caches are ignored as generated files, so local documentation
 validation does not make an otherwise committed source candidate appear dirty.
 Task-owned caches should still be removed when validation finishes.
 
+The isolated `diag/kafka-load-20261116` branch probes the original four-fork
+concurrency for the historical Kafka task-loss failure. Its Kafka-only Flink1.18
+diagnostic runs the four original sink/pipeline task/process-failure classes with
+all four providers each, three times:48 invocations. Production code and test
+assertions are unchanged from candidate `def0a3612`. It reuses the source-verified
+debug producer and does not repeat the unrelated413 timing/state controls. This
+branch is diagnostic evidence, not a replacement full qualification campaign.
+
 Historical JVM aggregate comparisons copy the complete current metric fixture dependencies,
 including the counter-only reporter, into the immutable previous runtime. Omitting that
 helper made the 1.18 previous-source build fail before measurements in run 43655033166.

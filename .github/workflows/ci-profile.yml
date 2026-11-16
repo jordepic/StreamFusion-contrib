@@ -156,17 +156,22 @@ jobs:
             kafka_selection='CanonicalKafkaPipelineFailureJobTest,CanonicalKafkaPipelineProcessFailureJobTest'
             kafka_trials=3
           fi
+          kafka_forks=2
+          if [[ '${{ matrix.suite }}' == 'kafka' && '${{ matrix.line }}' == '1.18' ]]; then
+            kafka_selection='CanonicalKafkaPipelineFailureJobTest,CanonicalKafkaPipelineProcessFailureJobTest,CanonicalKafkaSinkFailureJobTest,CanonicalKafkaSinkProcessFailureJobTest'
+            kafka_forks=4
+          fi
           for trial in $(seq 1 "$kafka_trials"); do
             mvn -B -ntp -P"$PROFILES" -pl streamfusion-runtime -am test \
               -Dnative.build.skip=true -Dsf.protobuf.checkStaleness=true \
               "-Dtest=$kafka_selection" -Dsf.canonical.kafka.fixture.smoke=false \
               -Dsurefire.failIfNoSpecifiedTests=false \
-              -Dsf.testForks=2 -Dsf.testReuseForks=false \
+              -Dsf.testForks="$kafka_forks" -Dsf.testReuseForks=false \
               "-Dsf.extraJvmArgs=-Xmx1g -Djava.io.tmpdir=$RUNNER_TEMP/canonical-fixtures"
             evidence="$RUNNER_TEMP/failure-regressions/kafka-${{ matrix.line }}-$trial"
             mkdir -p "$evidence"
             cp streamfusion-runtime/target/surefire-reports/TEST-tech.streamfusion.CanonicalKafka*.xml "$evidence/"
-            LINE='${{ matrix.line }}' EVIDENCE="$evidence" python3 - <<'PY'
+            LINE='${{ matrix.line }}' KAFKA_FORKS="$kafka_forks" EVIDENCE="$evidence" python3 - <<'PY'
           import os
           from pathlib import Path
           import xml.etree.ElementTree as ET
@@ -174,6 +179,9 @@ jobs:
                        'CanonicalKafkaPipelineFailureJobTest': 8} if os.environ['LINE'] == '2.2'
                       else {'CanonicalKafkaPipelineFailureJobTest': 4,
                             'CanonicalKafkaPipelineProcessFailureJobTest': 4})
+          if os.environ['LINE'] == '1.18' and os.environ['KAFKA_FORKS'] == '4':
+              expected.update(CanonicalKafkaSinkFailureJobTest=4,
+                              CanonicalKafkaSinkProcessFailureJobTest=4)
           observed = {}
           for report in Path(os.environ['EVIDENCE']).glob('TEST-*.xml'):
               suite = ET.parse(report).getroot()
