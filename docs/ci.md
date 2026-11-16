@@ -2008,3 +2008,14 @@ including the counter-only reporter, into the immutable previous runtime. Omitti
 helper made the 1.18 previous-source build fail before measurements in run 43655033166.
 Fixture hashes include the reporter; production source and native build inputs remain pinned
 to the selected historical commit.
+
+The isolated `diag/canonical-gc-20261116` profile checks the collector cost on
+short-lived canonical JVMs. For each Flink line on pinned JDK17, the same runner
+warms G1 and Serial once, then executes three alternating pairs of the four
+original Kafka failure classes with all providers and four forks. Each trial
+requires its complete original provider inventory and zero failures/errors/skips.
+The profile retains effective JVM flags, wall time and each original XML report;
+trial0 is warmup and excluded from timing claims. This is128 legacy and256
+current-line invocations including warmups, reusing identical verified native
+libraries. Separate-host earlier observations are a profiling lead, not a causal
+speedup claim. The merge candidate remains unchanged pending the measurements.
