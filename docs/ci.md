@@ -1745,8 +1745,8 @@ or the other backend/mini-batch combinations.
 Supply the successful original-source `native_run` to reuse its unexpired release
 artifact. The diagnostic verifies the native tree and producer provenance and
 checks both library byte hashes before staging them. It does not rebuild or upload
-another copy of those libraries. Only the workflow, this note and the failure-only
-benchmark observations may differ from source `5cf84474a`; production inputs and
+another copy of those libraries. Only the workflow, this note and diagnostic
+benchmark observations and their metric reader may differ from source `5cf84474a`; production inputs and
 the shared SQL, event-generation and multiset-comparison fixtures stay identical.
 
 The isolated `diag/hudi-checkpoints-20261116` diagnostic keeps the original
@@ -1767,3 +1767,18 @@ a restart. This remains a passing control, not a historical-cause attribution.
 It reuses original release producer43884142940 and makes no performance claim
 for the different checkpoint configuration. Passing prior history replays did
 not establish the historical missing-row cause.
+
+The historical Hudi diagnostic also captures operator-level input/output counters, native
+row-conversion counts and the released Hudi `recordWrittenPerSecond` meter cumulative count.
+It snapshots numeric values when metrics unregister or clusters close, and excludes gauges
+that retain writers or buffers. These separate operator boundaries inside a chained task;
+external task I/O alone cannot do that. Counts are grouped by job/operator/subtask/attempt
+and attached to results after timing. The observer reads existing counters and meters without
+adding per-row callbacks. Diagnostic timings are not performance evidence.
+
+A released-Flink1.18.1/Hudi1.2.1 local control wrote1,000 rows through four stock Hudi
+subtasks. Operator input, cumulative Hudi writes and physical Parquet footer counts each
+reported1,000; a second independent cluster reported its own seven input rows while retaining
+the first job’s values. The reporter uses the released in-memory factory registration and
+disposes that registration at benchmark teardown. This validates the observation method,
+not the historical row-loss cause.

@@ -15,6 +15,7 @@ import java.util.stream.Collectors;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.TaskManagerOptions;
+import org.apache.flink.runtime.testutils.HudiRecordMetrics;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.junit.jupiter.api.AfterEach;
@@ -37,6 +38,7 @@ class NexmarkHudiBenchmark {
   private static final int RUNS = Integer.parseInt(System.getenv().getOrDefault("SF_RUNS", "3"));
   private static final ObjectMapper JSON = new ObjectMapper();
   @TempDir Path temporary;
+  private final HudiRecordMetrics recordMetrics = new HudiRecordMetrics();
   private int sequence;
   private long inputBids;
   private String status = "running";
@@ -58,7 +60,11 @@ class NexmarkHudiBenchmark {
       status = "failed";
       throw failure;
     } finally {
-      report();
+      try {
+        report();
+      } finally {
+        recordMetrics.dispose();
+      }
     }
   }
 
@@ -151,6 +157,8 @@ class NexmarkHudiBenchmark {
                     observation.put("output_rows", result.outputRows);
                     observation.put("write_execution", result.writeExecution);
                     observation.put("read_execution", result.readExecution);
+                    observation.put("write_operator_counts", result.writeOperatorCounts);
+                    observation.put("read_operator_counts", result.readOperatorCounts);
                     observation.put("sink_partitions", result.partitions);
                     observation.put(
                         "validation",
@@ -186,6 +194,8 @@ class NexmarkHudiBenchmark {
                     details.put("readback_rows", result.outputRows);
                     details.put("write_execution", result.writeExecution);
                     details.put("read_execution", result.readExecution);
+                    details.put("write_operator_counts", result.writeOperatorCounts);
+                    details.put("read_operator_counts", result.readOperatorCounts);
                     details.put("parquet", parquetRows(result.target));
                     var conf = new Configuration();
                     conf.setString("path", result.target.toUri().toString());
@@ -271,7 +281,7 @@ class NexmarkHudiBenchmark {
 
   private StreamTableEnvironment environment(
       String engine, String backend, boolean miniBatch, int parallelism, boolean checkpoints) {
-    var memory = new Configuration();
+    var memory = recordMetrics.configure(new Configuration());
     memory.set(TaskManagerOptions.TASK_OFF_HEAP_MEMORY, MemorySize.ofMebiBytes(1024));
     var env = StreamExecutionEnvironment.getExecutionEnvironment(memory);
     env.setParallelism(parallelism);
@@ -525,7 +535,9 @@ class NexmarkHudiBenchmark {
             outputRows,
             partitions,
             writeExecution,
-            readExecution);
+            readExecution,
+            recordMetrics.snapshot(inserted.getJobClient().orElseThrow().getJobID().toString()),
+            recordMetrics.snapshot(readback.getJobClient().orElseThrow().getJobID().toString()));
       } finally {
         if (!success) {
           output.close();
@@ -763,6 +775,8 @@ class NexmarkHudiBenchmark {
     final List<Integer> partitions;
     final List<Map<String, Object>> writeExecution;
     final List<Map<String, Object>> readExecution;
+    final List<Map<String, Object>> writeOperatorCounts;
+    final List<Map<String, Object>> readOperatorCounts;
 
     Result(
         double milliseconds,
@@ -773,7 +787,9 @@ class NexmarkHudiBenchmark {
         long outputRows,
         java.util.Set<Integer> partitions,
         List<Map<String, Object>> writeExecution,
-        List<Map<String, Object>> readExecution) {
+        List<Map<String, Object>> readExecution,
+        List<Map<String, Object>> writeOperatorCounts,
+        List<Map<String, Object>> readOperatorCounts) {
       this.milliseconds = milliseconds;
       this.wallMilliseconds = wallMilliseconds;
       this.startedAt = startedAt;
@@ -783,6 +799,8 @@ class NexmarkHudiBenchmark {
       this.partitions = partitions.stream().sorted().collect(Collectors.toList());
       this.writeExecution = writeExecution;
       this.readExecution = readExecution;
+      this.writeOperatorCounts = writeOperatorCounts;
+      this.readOperatorCounts = readOperatorCounts;
     }
 
     public void close() throws Exception {

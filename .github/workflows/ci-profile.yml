@@ -67,7 +67,8 @@ jobs:
               subprocess.run(['git', 'fetch', '--no-tags', '--filter=blob:none', '--depth=1', 'origin', base], check=True)
           assert git('rev-parse', 'HEAD:native') == native
           allowed = {'.github/workflows/ci-profile.yml', 'docs/ci.md',
-                     'streamfusion-hudi/src/nexmark/java/tech/streamfusion/NexmarkHudiBenchmark.java'}
+                     'streamfusion-hudi/src/nexmark/java/tech/streamfusion/NexmarkHudiBenchmark.java',
+                     'streamfusion-hudi/src/nexmark/java/org/apache/flink/runtime/testutils/HudiRecordMetrics.java'}
           assert set(git('diff', '--name-only', base, 'HEAD').splitlines()) == allowed
           fixtures = ['src/test/java/tech/streamfusion/NexmarkMatrixBenchmark.java',
                       'src/test/java/tech/streamfusion/NexmarkKafkaBenchmark.java',
@@ -226,8 +227,16 @@ jobs:
                   assert row[boundary] and all('diagnostic_error' not in vertex for vertex in row[boundary]), row
                   assert any('records_in' in vertex and 'records_out' in vertex for vertex in row[boundary]), row
               assert all(vertex.get('checkpoint_interval_ms') == report['checkpoint_ms'] for vertex in row['write_execution']), row
+              assert row['write_operator_counts'] and row['read_operator_counts'], row
               if row['query'] == 'q10':
                   assert row['output_rows'] == 1840000
+                  written = sum(value['count'] for value in row['write_operator_counts']
+                                if value['metric'] == 'recordWrittenPerSecond')
+                  assert written == 1840000, ('released Hudi cumulative write count', row)
+                  read = sum(value['count'] for value in row['read_operator_counts']
+                             if value['metric'] == 'numRecordsOut'
+                             and value['operator_name'].startswith('Source:'))
+                  assert read == 1840000, ('stock readback source count', row)
           print('Selected query history and all nine Q10 identities passed; passing repeats do not establish the historical cause.')
           PYCODE
       - uses: actions/upload-artifact@v4
