@@ -232,11 +232,13 @@ jobs:
                   assert row['output_rows'] == 1840000
                   written = sum(value['count'] for value in row['write_operator_counts']
                                 if value['metric'] == 'recordWrittenPerSecond')
-                  assert written == 1840000, ('released Hudi cumulative write count', row)
+                  write_replayed = any(vertex['attempt'] > 0 for vertex in row['write_execution'])
+                  assert (written >= 1840000 if write_replayed else written == 1840000), ('released Hudi cumulative write count', row)
                   read = sum(value['count'] for value in row['read_operator_counts']
                              if value['metric'] == 'numRecordsOut'
                              and value['operator_name'].startswith('Source:'))
-                  assert read == 1840000, ('stock readback source count', row)
+                  read_replayed = any(vertex['attempt'] > 0 for vertex in row['read_execution'])
+                  assert (read >= 1840000 if read_replayed else read == 1840000), ('stock readback source count', row)
           print('Selected query history and all nine Q10 identities passed; passing repeats do not establish the historical cause.')
           PYCODE
       - uses: actions/upload-artifact@v4

@@ -1782,3 +1782,8 @@ reported1,000; a second independent cluster reported its own seven input rows wh
 the first job’s values. The reporter uses the released in-memory factory registration and
 disposes that registration at benchmark teardown. This validates the observation method,
 not the historical row-loss cause.
+
+Cumulative operator counts can include work replayed by failed attempts. The diagnostic
+requires exact Q10 counts when the corresponding execution graph has attempt0 throughout;
+when an attempt restarted, it retains replay-inclusive totals and requires at least the
+validated output cardinality. Full row/value assertions remain unchanged in every case.
