@@ -26,6 +26,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.CleanupMode;
+import org.junit.jupiter.api.io.CleanupMode;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -458,6 +459,8 @@ class CanonicalKafkaSinkJobTest {
     properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
     properties.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
     var actual = new ArrayList<String>();
+    var observedOffsets = new ArrayList<String>();
+    var sampledEnds = new java.util.TreeMap<Integer, Long>();
     try (var consumer = new KafkaConsumer<String, String>(properties)) {
       var partitions =
           consumer.partitionsFor(topic).stream()
@@ -466,9 +469,11 @@ class CanonicalKafkaSinkJobTest {
       consumer.assign(partitions);
       consumer.seekToBeginning(partitions);
       var ends = consumer.endOffsets(partitions);
+      ends.forEach((partition, offset) -> sampledEnds.put(partition.partition(), offset));
       long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
       while (true) {
         for (var record : consumer.poll(Duration.ofMillis(100))) {
+          observedOffsets.add(record.partition() + "@" + record.offset());
           var json =
               new org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper()
                   .readTree(record.value());
@@ -490,6 +495,42 @@ class CanonicalKafkaSinkJobTest {
             .sorted()
             .collect(Collectors.toList());
     java.util.Collections.sort(actual);
-    assertEquals(expected, actual, "Committed Kafka effects must have no loss or duplication");
+    assertEquals(expected, actual,
+        () -> "Committed Kafka effects must have no loss or duplication; read_committed ends="
+            + sampledEnds + ", observed partition@offset=" + observedOffsets
+            + ", broker context=" + brokerContext(topic));
+  }
+
+  private static List<String> brokerContext(String topic) {
+    var evidence = new ArrayList<String>();
+    var properties = new Properties();
+    properties.setProperty("bootstrap.servers", kafka.getBootstrapServers());
+    try (var admin = Admin.create(properties)) {
+      var transactions = admin.listTransactions().all().get(10, TimeUnit.SECONDS).stream()
+          .filter(transaction -> transaction.transactionalId().startsWith(topic + "-"))
+          .collect(Collectors.toList());
+      transactions.forEach(transaction -> evidence.add(transaction.toString()));
+      if (!transactions.isEmpty()) evidence.add(admin.describeTransactions(transactions.stream()
+              .map(transaction -> transaction.transactionalId()).collect(Collectors.toList()))
+          .all().get(10, TimeUnit.SECONDS).toString());
+    } catch (Exception diagnosticFailure) {
+      evidence.add("transaction-diagnostic-error: " + diagnosticFailure);
+    }
+    try {
+      Path output = Path.of(System.getProperty("sf.canonical.kafka.failureLogs"));
+      Files.createDirectories(output);
+      Files.writeString(output.resolve(topic + "-broker.log"), kafka.getLogs());
+      if (!topic.matches("[A-Za-z0-9-]+")) throw new IllegalArgumentException("Unexpected fixture topic");
+      var dump = kafka.execInContainer("sh", "-c",
+          "files=$(find /var/lib/kafka/data -type f -path '*/" + topic
+              + "-*/*.log' -print | paste -sd, -); "
+              + "test -n \"$files\" && timeout 15s kafka-dump-log --files \"$files\" --print-data-log --deep-iteration");
+      Files.writeString(output.resolve(topic + "-records.log"),
+          "exit=" + dump.getExitCode() + "\n" + dump.getStdout() + "\n" + dump.getStderr());
+      Files.write(output.resolve(topic + "-transactions.txt"), evidence);
+    } catch (Exception diagnosticFailure) {
+      evidence.add("broker-log-diagnostic-error: " + diagnosticFailure);
+    }
+    return evidence;
   }
 }

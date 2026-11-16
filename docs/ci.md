@@ -1711,3 +1711,27 @@ The runtime Java CI command bounds each Surefire fork at 30 minutes. A fork that
 reporting its test results fails the gate instead of occupying a runner until the full job timeout;
 the test selection and assertions remain the same. Canonical child-worker timeouts embed their
 logs and thread dumps in the failure report for diagnosis.
+
+
+### Original-source Kafka failure diagnostic
+
+`diag/kafka-original-source-20261116` isolates the archived Flink1.18/JDK17 Kafka
+extra-commit failure from current native-runtime changes. It preserves production source,
+SQL, data, providers and all assertions from `2a304d57757d01bfdd6804f63a23efa39732635c`.
+Only workflow/docs, retained failed fixtures and read-only checkpoint/consumer/broker
+observations differ. The native tree is `7c4f8c408c46ab7c6b712e9880850b8b06c18387`.
+The original debug artifact expired, so the diagnostic rebuilds its original locked
+workspace/lib recipe, pinned toolchain and debug settings, then retains only the three
+Kafka test libraries. This is a reproduction diagnostic, not a merge candidate.
+
+Four original failure classes run their four providers with four forks under pinned
+Temurin17.0.21+9/default G1, original tier-1/code-cache flags and one-gigabyte heaps.
+Up to three repetitions stop at the first failure; every completed trial retains its
+original case identities and outcomes. No pending-state assertion is relaxed and no new
+handoff is inserted. If the committed-row assertion fails, its original expected/actual
+values include sampled offsets and broker transaction descriptions. A bounded broker-log
+dump retains producer IDs/epochs and transaction markers when the image's dump tool is
+available. Diagnostic extraction errors remain visible alongside the original failure.
+Only failed fixture flat logs/metadata are uploaded; runtime tables and checkpoints are
+excluded and scoped runtime data is removed after evidence upload. Passing repetitions
+cannot establish the historical root cause.

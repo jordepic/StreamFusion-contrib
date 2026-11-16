@@ -1,424 +1,177 @@
-name: CI startup profile
-
+name: Historical Kafka failure reproduction
 on:
-  workflow_dispatch:
-    inputs:
-      suite:
-        description: 'Paired JVM comparison to run'
-        type: choice
-        options: [runtime, runtime-parallel, runtime-jfr, canonical, native-only, runtime-hotspots, canonical-setup, lake-setup]
-        default: runtime
-      native_run:
-        description: 'Existing native producer for focused diagnostics'
-        type: string
-      jdk:
-        description: 'JDK for a focused setup diagnostic'
-        type: choice
-        options: ['11', '17']
-        default: '11'
-      parent_jfr:
-        description: 'Record the canonical setup probe parent JVMs for attribution'
-        type: boolean
-        default: false
-      metadata_regression:
-        description: 'Check metadata collector isolation and complete append arithmetic'
-        type: boolean
-        default: false
-      kafka_rescale_regression:
-        description: 'Check released committer-state decoding and all Kafka rescale providers'
-        type: boolean
-        default: false
-      flink_line:
-        description: 'Flink line for multi-release diagnostics'
-        type: choice
-        options: [all, '2.2', '1.18']
-        default: all
-      hotspot_mode:
-        description: 'Attribute slow classes or compare their worker counts'
-        type: choice
-        options: [attribution, parallel, plan-cache, canonical-parallel, canonical-gc, canonical-gc-matrix, cluster-startup, deeper-runtime, fluss-details, recursive-completion, recovery-diagnostics, recovery-transport, fluss-close, runtime-regressions]
-        default: attribution
-
+  workflow_dispatch: {}
 permissions:
   contents: read
   actions: read
-
-env:
-  RUST_BACKTRACE: '1'
-  CANONICAL_JAVA_11: '11.0.32+9'
-  CANONICAL_JAVA_17: '17.0.21+9'
-
 concurrency:
-  group: ci-startup-profile-${{ github.ref }}-${{ inputs.suite }}-${{ inputs.hotspot_mode }}-${{ inputs.flink_line || 'all' }}-${{ inputs.jdk || 'all' }}-${{ inputs.parent_jfr && 'jfr' || 'plain' }}
-  cancel-in-progress: true
-
+  group: kafka-original-source-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  lake-setup:
-    if: inputs.suite == 'lake-setup' && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      FLINK_PROFILES: ${{ inputs.flink_line == '1.18' && 'paimon,flink-1.18' || 'paimon' }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          filter: blob:none
-      - run: python3 bin/ci-free-disk.py
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ inputs.jdk == '11' && env.CANONICAL_JAVA_11 || env.CANONICAL_JAVA_17 }}
-          cache: maven
-      - name: Verify the existing native producer
-        id: native
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NATIVE_RUN: ${{ inputs.native_run }}
-        run: python3 bin/ci_native_source.py --run "$NATIVE_RUN"
-      - uses: actions/download-artifact@v5
-        with:
-          name: ${{ steps.native.outputs.artifact }}
-          run-id: ${{ inputs.native_run }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/original-native
-      - name: Stage smaller libraries with identical runtime sections
-        run: |
-          python3 bin/ci_native_test_artifact.py --input "$RUNNER_TEMP/original-native" \
-            --output native/target/debug
-      - name: Resolve the complete module dependencies
-        run: python3 bin/ci-maven-dependencies.py --profile "$FLINK_PROFILES" --projects streamfusion-paimon --also-make
-      - name: Run both complete format configurations
-        run: >-
-          python3 bin/ci_lake_tests.py --profile "$FLINK_PROFILES" --module streamfusion-paimon
-          --summary "$RUNNER_TEMP/lake-test-phases.json"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: lake-setup-${{ inputs.flink_line == '1.18' && '1.18' || '2.2' }}-jdk${{ inputs.jdk }}
-          path: |
-            ${{ runner.temp }}/lake-test-phases.json
-            streamfusion-paimon/target/surefire-reports/*paimon-parquet*
-            streamfusion-paimon/target/surefire-reports/*paimon-orc*
-            native/target/debug/manifest.json
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Remove probe libraries
-        if: always()
-        run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          import shutil
-          for directory in (Path(os.environ['RUNNER_TEMP']) / 'original-native', Path('native/target/debug')):
-              if directory.exists():
-                  shutil.rmtree(directory)
-          PY
-
-  canonical-setup:
-    if: inputs.suite == 'canonical-setup'
-    uses: ./.github/workflows/ci-canonical-setup.yml
-    with:
-      line: ${{ inputs.flink_line == '1.18' && '1.18' || '2.2' }}
-      jdk: ${{ inputs.jdk }}
-      native_run: ${{ inputs.native_run }}
-      parent_jfr: ${{ inputs.parent_jfr }}
-      metadata_regression: ${{ inputs.metadata_regression }}
-      kafka_rescale_regression: ${{ inputs.kafka_rescale_regression }}
-
-  native:
-    if: ${{ inputs.suite != 'runtime-hotspots' && inputs.suite != 'canonical-setup' && inputs.suite != 'lake-setup' && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main') }}
+  original-runtime:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      JAVA_TOOL_OPTIONS: '-XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m'
+      SF_KAFKA_INTEGRATION: 'true'
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+      - name: Require unchanged historical production and fixture inputs
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          base = '2a304d57757d01bfdd6804f63a23efa39732635c'
+          allowed = {'.github/workflows/ci-profile.yml','docs/ci.md',
+                     'src/test/java/tech/streamfusion/CanonicalKafkaSinkJobTest.java',
+                     'src/test/java/org/example/canonical/CanonicalKafkaSinkJobWorker.java'}
+          changed = set(subprocess.check_output(['git','diff','--name-only',base,'HEAD'],text=True).splitlines())
+          assert changed == allowed, changed
+          parent=Path('src/test/java/tech/streamfusion/CanonicalKafkaSinkJobTest.java')
+          original=subprocess.check_output(['git','show',base+':'+str(parent)],text=True)
+          current=parent.read_text()
+          for start,end in [('  static Stream<Arguments> cases()', '  @ParameterizedTest'),
+                            ('  @ParameterizedTest', '  private static void assertRows(')]:
+              assert current[current.index(start):current.index(end)] == original[original.index(start):original.index(end)], (start,end)
+          tree = subprocess.check_output(['git','rev-parse','HEAD:native'],text=True).strip()
+          assert tree == '7c4f8c408c46ab7c6b712e9880850b8b06c18387', tree
+          root = Path(os.environ['RUNNER_TEMP'])/'historical-kafka'
+          root.mkdir()
+          (root/'provenance.json').write_text(json.dumps(dict(
+              source=base, diagnostic=os.environ['GITHUB_SHA'], native_tree=tree,
+              changed_files=sorted(changed), cargo_lock_sha256=hashlib.sha256(Path('native/Cargo.lock').read_bytes()).hexdigest(),
+              runner_image=os.environ.get('ImageVersion'), java_tool_options=os.environ['JAVA_TOOL_OPTIONS'],
+              build_recipe='cargo build --workspace --lib --locked --timings; original debug flags',
+              note='Original production/native/SQL/case providers/assertions; only read-only failure observations added'),indent=2)+'\n')
+          PY
       - run: python3 bin/ci-free-disk.py
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native
           shared-key: debug-jvm
-          save-if: ${{ github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main' }}
-      - run: cargo build --manifest-path native/Cargo.toml --workspace --lib --locked --timings
-      - uses: actions/upload-artifact@v4
-        if: inputs.suite != 'native-only'
-        with:
-          name: ci-profile-native-${{ github.sha }}
-          path: native/target/debug/libstreamfusion.so
-          compression-level: 1
-          retention-days: 1
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ci-profile-native-timings-${{ github.sha }}
-          path: native/target/cargo-timings
-          retention-days: 1
-          if-no-files-found: ignore
-
-  paired:
-    needs: native
-    if: inputs.suite == 'canonical'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        jdk: ['11', '17']
-    steps:
-      - uses: actions/checkout@v6
-      - run: python3 bin/ci-free-disk.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ matrix.jdk }}
+          java-version: '17.0.21+9'
           cache: maven
-      - uses: actions/download-artifact@v5
-        with:
-          name: ci-profile-native-${{ github.sha }}
-          path: native/target/debug
-      - name: Compile the unchanged profile cases once
+      - name: Rebuild the expired historical debug runtime with its original recipe
+        working-directory: native
+        run: cargo build --workspace --lib --locked --timings
+      - name: Verify JNI exports and retain only the Kafka test runtime
         run: |
-          python3 bin/ci-maven-dependencies.py --projects streamfusion-runtime --also-make
-          python3 bin/ci-maven-dependencies.py --artifact org.apache.maven.surefire:surefire-junit-platform:3.2.5
-          mvn -B -ntp -pl streamfusion-runtime -am test-compile -Dnative.build.skip=true
-      - name: Alternate default and startup JVM settings on the same runner
-        run: python3 bin/profile-canonical-ci.py --output "$RUNNER_TEMP/ci-startup-profile" --repetitions 3 --cds
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ci-startup-profile-jdk${{ matrix.jdk }}
-          path: |
-            ${{ runner.temp }}/ci-startup-profile/
-            streamfusion-runtime/target/surefire-reports/*ci-profile*
-          retention-days: 7
-
-  runtime:
-    needs: native
-    if: inputs.suite != 'canonical' && inputs.suite != 'native-only' && inputs.suite != 'runtime-hotspots' && inputs.suite != 'canonical-setup' && inputs.suite != 'lake-setup'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(inputs.suite == 'runtime-jfr' && '[{"jdk":"17","line":"2.2","jfr":true}]' || inputs.suite == 'runtime-parallel' && '[{"jdk":"11","line":"1.18"},{"jdk":"17","line":"1.18"},{"jdk":"11","line":"2.2"},{"jdk":"17","line":"2.2"},{"jdk":"17","line":"2.2","jfr":true}]' || '[{"jdk":"11","line":"1.18"},{"jdk":"17","line":"1.18"},{"jdk":"11","line":"2.2"},{"jdk":"17","line":"2.2"}]') }}
-    steps:
-      - uses: actions/checkout@v6
-      - run: python3 bin/ci-free-disk.py
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ matrix.jdk }}
-          cache: maven
-      - uses: actions/download-artifact@v5
-        with:
-          name: ci-profile-native-${{ github.sha }}
-          path: native/target/debug
-      - name: Compile the unchanged runtime cases once
-        env:
-          FLINK_LINE: ${{ matrix.line }}
-        run: |
-          profile=()
-          profile_name=''
-          if [[ "$FLINK_LINE" == '1.18' ]]; then
-            profile=(-Pflink-1.18)
-            profile_name='flink-1.18'
-          fi
-          python3 bin/ci-maven-dependencies.py --profile "$profile_name" --projects streamfusion-runtime --also-make
-          python3 bin/ci-maven-dependencies.py --artifact org.apache.maven.surefire:surefire-junit-platform:3.2.5
-          mvn -B -ntp "${profile[@]}" -pl streamfusion-runtime -am test-compile -Dnative.build.skip=true
-      - name: Compare runtime JVM compilation with identical assertions
-        env:
-          PROFILE_SUITE: ${{ inputs.suite }}
-          RECORD_JFR: ${{ matrix.jfr }}
-          FLINK_LINE: ${{ matrix.line }}
-        run: |
-          args=(--line "$FLINK_LINE" --repetitions 3)
-          if [[ "$RECORD_JFR" == 'true' ]]; then
-            args=(--line "$FLINK_LINE" --repetitions 1 --jfr)
-          elif [[ "$PROFILE_SUITE" == 'runtime-parallel' ]]; then
-            args+=(--parallel)
-          fi
-          python3 bin/profile-runtime-ci.py --output "$RUNNER_TEMP/runtime-startup-profile" "${args[@]}"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: runtime-startup-profile-flink${{ matrix.line }}-jdk${{ matrix.jdk }}${{ matrix.jfr && '-jfr' || '' }}
-          path: |
-            ${{ runner.temp }}/runtime-startup-profile/
-            streamfusion-runtime/target/surefire-reports/*runtime-profile*
-          retention-days: 7
-
-  hotspots:
-    if: inputs.suite == 'runtime-hotspots' && (github.repository != 'datafusion-contrib/StreamFusion' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    concurrency:
-      group: ci-hotspot-profile-${{ github.ref }}-${{ inputs.hotspot_mode }}-${{ matrix.line }}-jdk${{ matrix.jdk }}
-      cancel-in-progress: true
-    strategy:
-      fail-fast: false
-      matrix:
-        jdk: ${{ fromJSON((inputs.hotspot_mode == 'parallel' || inputs.hotspot_mode == 'canonical-gc-matrix') && '["11"]' || (inputs.hotspot_mode == 'deeper-runtime' || inputs.hotspot_mode == 'fluss-details' || inputs.hotspot_mode == 'fluss-close' || inputs.hotspot_mode == 'recursive-completion' || inputs.hotspot_mode == 'runtime-regressions' || inputs.hotspot_mode == 'recovery-diagnostics' || inputs.hotspot_mode == 'recovery-transport') && '["17"]' || '["11", "17"]') }}
-        line: ${{ fromJSON((inputs.hotspot_mode == 'canonical-gc-matrix' || inputs.hotspot_mode == 'cluster-startup') && (inputs.flink_line == '1.18' && '["1.18"]' || inputs.flink_line == '2.2' && '["2.2"]' || '["2.2", "1.18"]') || '["2.2"]') }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          filter: blob:none
-      - run: python3 bin/ci-free-disk.py
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ inputs.hotspot_mode == 'cluster-startup' && (matrix.jdk == '11' && env.CANONICAL_JAVA_11 || env.CANONICAL_JAVA_17) || matrix.jdk }}
-          cache: maven
-      - name: Verify native artifact source and completed producer
-        id: native
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NATIVE_RUN: ${{ inputs.native_run }}
-        run: python3 bin/ci_native_source.py --run "$NATIVE_RUN"
-      - uses: actions/download-artifact@v5
-        with:
-          name: ${{ steps.native.outputs.artifact }}
-          run-id: ${{ inputs.native_run }}
-          github-token: ${{ github.token }}
-          path: native/target/debug
-      - name: Compile the unchanged complete runtime inventory
-        env:
-          HOTSPOT_MODE: ${{ inputs.hotspot_mode }}
-          FLINK_LINE: ${{ matrix.line }}
-        run: |
-          profile=()
-          profile_name=''
-          projects='streamfusion-runtime'
-          goal='test-compile'
-          skip=()
-          if [[ "$HOTSPOT_MODE" == 'canonical-parallel' || "$HOTSPOT_MODE" == 'canonical-gc-matrix' ]]; then
-            profile=(-Pcanonical-kafka)
-            profile_name='canonical-kafka'
-            if [[ "$FLINK_LINE" == '1.18' ]]; then
-              profile=(-Pflink-1.18,canonical-kafka)
-              profile_name='flink-1.18,canonical-kafka'
-            fi
-          elif [[ "$HOTSPOT_MODE" == 'cluster-startup' && "$FLINK_LINE" == '1.18' ]]; then
-            profile=(-Pflink-1.18)
-            profile_name='flink-1.18'
-          elif [[ "$HOTSPOT_MODE" == 'deeper-runtime' || "$HOTSPOT_MODE" == 'fluss-details' || "$HOTSPOT_MODE" == 'fluss-close' ]]; then
-            projects='streamfusion-fluss'
-            goal='test'
-            skip=(-DskipTests)
-          elif [[ "$HOTSPOT_MODE" == 'recovery-diagnostics' ]]; then
-            profile=(-Pflink-1.18,ci-diagnostics)
-            profile_name='flink-1.18,ci-diagnostics'
-            goal='test'
-            skip=(-DskipTests)
-          elif [[ "$HOTSPOT_MODE" == 'recovery-transport' ]]; then
-            profile=(-Pflink-1.18)
-            profile_name='flink-1.18'
-          fi
-          python3 bin/ci-maven-dependencies.py --profile "$profile_name" --projects "$projects" --also-make
-          python3 bin/ci-maven-dependencies.py --artifact org.apache.maven.surefire:surefire-junit-platform:3.2.5
-          mvn -B -ntp "${profile[@]}" -pl "$projects" -am "$goal" "${skip[@]}" -Dnative.build.skip=true
-      - name: Attribute measured slow classes under current CI worker settings
-        env:
-          HOTSPOT_MODE: ${{ inputs.hotspot_mode }}
-          FLINK_LINE: ${{ matrix.line }}
-        run: |
-          args=(--line 2.2 --repetitions 1 --hotspots)
-          if [[ "$HOTSPOT_MODE" == 'parallel' ]]; then
-            args=(--line 2.2 --repetitions 2 --slow-mix --parallel)
-          elif [[ "$HOTSPOT_MODE" == 'plan-cache' ]]; then
-            args=(--line 2.2 --repetitions 2 --plan-cache)
-          fi
-          nproc
-          free -m
-          vmstat -w 15 > "$RUNNER_TEMP/runtime-hotspots-vmstat.txt" &
-          memory_sampler=$!
-          trap 'kill "$memory_sampler" 2>/dev/null || true' EXIT
-          if [[ "$HOTSPOT_MODE" == 'deeper-runtime' || "$HOTSPOT_MODE" == 'fluss-details' || "$HOTSPOT_MODE" == 'fluss-close' ]]; then
-            (
-              while true; do
-                date -u
-                docker stats --no-stream --format '{{json .}}'
-                sleep 15
-              done
-            ) > "$RUNNER_TEMP/runtime-hotspots-containers.txt" &
-            container_sampler=$!
-            trap 'kill "$memory_sampler" "$container_sampler" 2>/dev/null || true' EXIT
-            if [[ "$HOTSPOT_MODE" == 'deeper-runtime' ]]; then
-              python3 bin/profile-ci-details.py --line 2.2 --suite recursive --output "$RUNNER_TEMP/runtime-hotspots/recursive"
-            fi
-            comparison=()
-            if [[ "$HOTSPOT_MODE" == 'fluss-close' ]]; then
-              started=$SECONDS
-              docker pull zookeeper:3.9.2
-              docker pull apache/fluss:1.0.0
-              mkdir -p "$RUNNER_TEMP/runtime-hotspots"
-              echo "Docker image preparation: $((SECONDS - started)) seconds" > "$RUNNER_TEMP/runtime-hotspots/image-preparation.txt"
-              comparison=(--compare-close)
-            fi
-            python3 bin/profile-ci-details.py --line 2.2 --suite fluss "${comparison[@]}" --output "$RUNNER_TEMP/runtime-hotspots/fluss"
-          elif [[ "$HOTSPOT_MODE" == 'runtime-regressions' ]]; then
-            python3 bin/profile-ci-details.py --line 2.2 --suite regressions --output "$RUNNER_TEMP/runtime-hotspots/regressions"
-          elif [[ "$HOTSPOT_MODE" == 'recursive-completion' ]]; then
-            python3 bin/profile-ci-details.py --line 2.2 --suite recursive --compare-completion --output "$RUNNER_TEMP/runtime-hotspots/recursive-completion"
-          elif [[ "$HOTSPOT_MODE" == 'recovery-diagnostics' ]]; then
-            python3 bin/profile-ci-details.py --line 1.18 --suite recovery --output "$RUNNER_TEMP/runtime-hotspots/recovery"
-          elif [[ "$HOTSPOT_MODE" == 'recovery-transport' ]]; then
-            python3 bin/profile-ci-details.py --line 1.18 --suite recovery --compare-transport --output "$RUNNER_TEMP/runtime-hotspots/recovery-transport"
-          elif [[ "$HOTSPOT_MODE" == 'cluster-startup' ]]; then
-            python3 bin/profile-runtime-ci.py --cluster-startup --line "$FLINK_LINE" --repetitions 3 --output "$RUNNER_TEMP/runtime-hotspots"
-          elif [[ "$HOTSPOT_MODE" == 'canonical-parallel' ]]; then
-            python3 bin/profile-canonical-ci.py --parallel --repetitions 2 --output "$RUNNER_TEMP/runtime-hotspots"
-          elif [[ "$HOTSPOT_MODE" == 'canonical-gc' ]]; then
-            python3 bin/profile-canonical-ci.py --gc --repetitions 3 --output "$RUNNER_TEMP/runtime-hotspots"
-          elif [[ "$HOTSPOT_MODE" == 'canonical-gc-matrix' ]]; then
-            python3 bin/profile-canonical-ci.py --gc --worker-mix --line "$FLINK_LINE" --repetitions 2 --output "$RUNNER_TEMP/runtime-hotspots"
-          else
-            python3 bin/profile-runtime-ci.py "${args[@]}" --output "$RUNNER_TEMP/runtime-hotspots"
-          fi
-      - name: Verify deferred cluster lifecycle and native cleanup
-        if: inputs.hotspot_mode == 'cluster-startup'
-        env:
-          FLINK_LINE: ${{ matrix.line }}
-          JAVA_TOOL_OPTIONS: '-XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m'
-        run: |
-          profile=()
-          selection='SharedFlinkClusterLifecycleTest,CanonicalWorkerCacheTest,NativeAllocatorTest,NativeParityValueTest,Utf8WriterReuseTest,TransposeOperatorsTest,FlinkJvmAggregateSqlHarnessTest'
-          if [[ "$FLINK_LINE" == '1.18' ]]; then
-            profile=(-Pflink-1.18)
-            selection+=',FlinkBatchTestContextLifecycleTest'
-          fi
-          mvn -B -ntp "${profile[@]}" -pl streamfusion-runtime \
-            "-Dtest=$selection" -Dsf.testForks=4 -Dsf.testReuseForks=false \
-            '-Dsf.extraJvmArgs=-Xmx2g' -Dsurefire.reportNameSuffix=ci-cluster-controls \
-            -am test -Dsf.ci.precompiledJava=true -Dnative.build.skip=true \
-            -Dsf.protobuf.checkStaleness=true -DskipTests=true -Dsf.runtime.tests.skip=false \
-            -Dsurefire.failIfNoSpecifiedTests=false
+          python3 bin/check-native-workspace.py --libraries native/target/debug
+          python3 bin/ci_native_test_artifact.py --input native/target/debug \
+            --output "$RUNNER_TEMP/historical-kafka/native"
           python3 - <<'PY'
-          from collections import Counter
-          import os
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'historical-kafka'
+          needed={'libstreamfusion.so','libstreamfusion_json.so','libstreamfusion_kafka.so'}
+          for path in (root/'native').glob('*.so'):
+              if path.name not in needed: path.unlink()
+          paths=list((root/'native').glob('*.so'))
+          assert {path.name for path in paths}==needed
+          provenance=json.loads((root/'provenance.json').read_text())
+          provenance['native_sha256']={path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+          provenance['rustc']=subprocess.check_output(['rustc','-Vv'],text=True)
+          flags=subprocess.run(['java','-XX:+PrintCommandLineFlags','-version'],capture_output=True,text=True,check=True)
+          provenance['java_effective_flags']=flags.stdout+flags.stderr
+          assert 'UseG1GC' in provenance['java_effective_flags']
+          (root/'provenance.json').write_text(json.dumps(provenance,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: historical-kafka-debug-native-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/historical-kafka/native/*.so
+            ${{ runner.temp }}/historical-kafka/provenance.json
+          compression-level: 1
+          retention-days: 3
+          if-no-files-found: error
+      - name: Use the original stripped test payload
+        run: cp "$RUNNER_TEMP/historical-kafka/native/"*.so native/target/debug/
+      - name: Resolve only the historical Kafka reactor
+        run: python3 bin/ci-maven-dependencies.py --profile flink-1.18,canonical-kafka --projects streamfusion-runtime --also-make
+      - name: Run original providers with their original four-fork contention
+        env:
+          SF_CANONICAL_CDS_DIR: ${{ runner.temp }}/historical-kafka/cds
+        run: |
+          mkdir -p "$RUNNER_TEMP/historical-kafka/runtime" "$RUNNER_TEMP/historical-kafka/broker"
+          status=0
+          for trial in 1 2 3; do
+            result=0
+            mvn -B -ntp -Pflink-1.18,canonical-kafka -pl streamfusion-runtime -am test \
+              -Dnative.build.skip=true -Dsf.protobuf.checkStaleness=true \
+              -Dtest=CanonicalKafkaPipelineFailureJobTest,CanonicalKafkaPipelineProcessFailureJobTest,CanonicalKafkaSinkFailureJobTest,CanonicalKafkaSinkProcessFailureJobTest \
+              -Dsurefire.failIfNoSpecifiedTests=false -Dsf.testForks=4 -Dsf.testReuseForks=false \
+              "-Dsf.extraJvmArgs=-Xmx1g -Djava.io.tmpdir=$RUNNER_TEMP/historical-kafka/runtime -Dsf.canonical.kafka.failureLogs=$RUNNER_TEMP/historical-kafka/broker" || result=$?
+            mkdir -p "$RUNNER_TEMP/historical-kafka/trial-$trial"
+            cp streamfusion-runtime/target/surefire-reports/TEST-tech.streamfusion.CanonicalKafka*.xml "$RUNNER_TEMP/historical-kafka/trial-$trial/"
+            printf '%s\n' "$result" > "$RUNNER_TEMP/historical-kafka/trial-$trial/exit-code.txt"
+            if [[ "$result" != 0 ]]; then status="$result"; break; fi
+          done
+          exit "$status"
+      - name: Summarize original-case outcomes and retained fault evidence
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json,os
           from pathlib import Path
           import xml.etree.ElementTree as ET
-          counts = Counter()
-          for report in Path('streamfusion-runtime/target/surefire-reports').glob('TEST-*-ci-cluster-controls.xml'):
-              suite = ET.parse(report).getroot()
-              counts.update({key: int(suite.get(key, 0)) for key in ('tests', 'failures', 'errors', 'skipped')})
-          expected = 81 if os.environ['FLINK_LINE'] == '1.18' else 79
-          if counts != dict(tests=expected, failures=0, errors=0, skipped=0):
-              raise SystemExit(f'Incomplete lifecycle controls: {counts}')
-          print(f'All {expected} lifecycle, native cleanup and SQL controls passed')
+          root=Path(os.environ['RUNNER_TEMP'])/'historical-kafka'
+          root.mkdir(exist_ok=True)
+          reports=[]
+          for path in sorted(root.glob('trial-*/*.xml')):
+              suite=ET.parse(path).getroot()
+              reports.append(dict(trial=path.parent.name,name=suite.get('name'),
+                  **{key:int(suite.get(key,0)) for key in ('tests','failures','errors','skipped')},
+                  cases=[dict(name=case.get('name'),classname=case.get('classname'),
+                              failure='\n'.join((node.text or '') for node in case if node.tag in ('failure','error')))
+                         for case in suite.findall('testcase')]))
+          retained=[]
+          for fixture in (root/'runtime').rglob('switched'):
+              if not fixture.is_dir(): continue
+              retained.append(dict(path=str(fixture.relative_to(root)),
+                  checkpoint_counts={p.name:p.read_text() for p in fixture.glob('*checkpoint-counts.tsv')},
+                  plans={p.name:p.read_text() for p in fixture.glob('*-plan.txt')}))
+          result=dict(head=os.environ['GITHUB_SHA'],reports=reports,retained_failed_fixtures=retained)
+          (root/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(dict(actual_invocations=sum(row['tests'] for row in reports),
+                                failures=sum(row['failures'] for row in reports),errors=sum(row['errors'] for row in reports)),indent=2))
+          expected={'tech.streamfusion.CanonicalKafka'+name+'JobTest' for name in
+                    ('PipelineFailure','PipelineProcessFailure','SinkFailure','SinkProcessFailure')}
+          for trial in sorted({row['trial'] for row in reports}):
+              rows=[row for row in reports if row['trial']==trial]
+              assert {row['name'] for row in rows}==expected and len(rows)==4, rows
+              assert all(row['tests']==4 and row['skipped']==0 for row in rows),rows
+          if reports and not any(row['failures'] or row['errors'] for row in reports):
+              assert sum(row['tests'] for row in reports)==48
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: runtime-hotspots-${{ inputs.hotspot_mode }}-${{ (inputs.hotspot_mode == 'canonical-gc-matrix' || inputs.hotspot_mode == 'cluster-startup') && format('flink{0}-', matrix.line) || '' }}jdk${{ matrix.jdk }}
+          name: historical-kafka-results-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/runtime-hotspots/
-            ${{ runner.temp }}/runtime-hotspots-vmstat.txt
-            ${{ runner.temp }}/runtime-hotspots-containers.txt
-            streamfusion-runtime/target/surefire-reports/*runtime-profile*
-            streamfusion-runtime/target/surefire-reports/*ci-cluster-controls*
+            ${{ runner.temp }}/historical-kafka/result.json
+            ${{ runner.temp }}/historical-kafka/provenance.json
+            ${{ runner.temp }}/historical-kafka/trial-*/*
+            ${{ runner.temp }}/historical-kafka/broker/*
+            ${{ runner.temp }}/historical-kafka/runtime/**/switched/*.log
+            ${{ runner.temp }}/historical-kafka/runtime/**/switched/*.txt
+            ${{ runner.temp }}/historical-kafka/runtime/**/switched/*.tsv
+            ${{ runner.temp }}/historical-kafka/runtime/**/switched/*.json
           retention-days: 7
+          if-no-files-found: error
+      - name: Remove task fixtures and staging after evidence upload
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os,shutil
+          from pathlib import Path
+          shutil.rmtree(Path(os.environ['RUNNER_TEMP'])/'historical-kafka',ignore_errors=True)
+          PY
