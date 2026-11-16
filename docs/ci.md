@@ -1714,3 +1714,22 @@ The runtime Java CI command bounds each Surefire fork at 30 minutes. A fork that
 reporting its test results fails the gate instead of occupying a runner until the full job timeout;
 the test selection and assertions remain the same. Canonical child-worker timeouts embed their
 logs and thread dumps in the failure report for diagnosis.
+
+
+### Historical Q10 failure reproduction
+
+The `diag/hudi-q10-20261116` diagnostic branch is intentionally pinned to production
+source `5cf84474a7d2c5e6ee4ca82f16ee2927777c18ae`, the source of historical failed
+job132617478396. This isolated investigation is not a merge candidate and does not
+qualify current main. Its production sources, native inputs, SQL, event generation
+and full-value assertions are unchanged. Only the diagnostic workflow, this note
+and failure-only physical-file/commit inspection differ from the failing source.
+
+The matching native artifact expired, so the workflow rebuilds the two original
+release libraries once using the shared release cache. It selects only Q10 with
+two million events, four tasks, RocksDB, mini-batching disabled, object reuse,
+JDK17.0.21+9, one warmup and three trials for each of the original three engines.
+The result includes source and library hashes plus physical-file and commit row
+counts on failure. Successful repeats alone do not establish the original cause.
+Runtime tables and sorter scratch are removed after evidence upload; checkpoint
+data and complete table payloads are excluded from artifacts.
