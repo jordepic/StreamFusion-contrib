@@ -7,6 +7,10 @@ the complete post-merge checks, the upstream Flink weekly run remains available,
 
 ## Contributing from a personal fork
 
+This fork default branch disables the copied canonical cron triggers. Run fork qualification
+manually; automatic weekly suites on an obsolete fork default branch compete with active work.
+Canonical scheduled suites and status reporting remain configured in the canonical repository.
+
 1. Fork `datafusion-contrib/StreamFusion` into your personal account. If that name is already
    occupied by an unrelated repository, choose another fork name.
 2. Enable workflows in the fork's **Actions** tab before pushing your branch. GitHub disables
