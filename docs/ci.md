@@ -1754,11 +1754,16 @@ production/native source, SQL, event corpus,2M rows, parallelism4, RocksDB,
 object reuse and full-value assertions. It parameterizes only checkpoint
 frequency (default1000ms, stress100ms) and records the actual write/readback
 execution vertices, attempt numbers and final I/O record counts outside the
-measured region. Together with failure-only Parquet and commit counts, this
-separates compute output loss, uncommitted physical output and readback loss.
+measured region. Failure-only Parquet and commit counts help separate physical
+output from committed output and stock readback results.
 Task I/O counters describe external task edges; Arrow edges count batches,
 and fully chained tasks can have zero external records. Interpret these counts
 alongside the recorded vertex topology and physical table counts.
+The completed 100ms probe passed all nine Q10 identities. Its write pipelines
+were fully chained and reported zero external I/O; those counters cannot isolate
+compute loss from sink loss within the chain. Readback counters covered all
+1,840,000 rows, and previous-pipeline trials completed 482–483 checkpoints without
+a restart. This remains a passing control, not a historical-cause attribution.
 It reuses original release producer43884142940 and makes no performance claim
 for the different checkpoint configuration. Passing prior history replays did
 not establish the historical missing-row cause.
