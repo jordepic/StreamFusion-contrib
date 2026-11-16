@@ -1997,6 +1997,11 @@ all four providers each, three times:48 invocations. Production code and test
 assertions are unchanged from candidate `def0a3612`. It reuses the source-verified
 debug producer and does not repeat the unrelated413 timing/state controls. This
 branch is diagnostic evidence, not a replacement full qualification campaign.
+The first four-fork probe passed all48 original provider identities, but used
+Serial GC on JDK17. Its follow-up restores the original JVM flags (default G1
+on JDK17, Serial only on JDK11), records the effective collector, and retains the
+same four classes, providers, repetition count and verified native producer.
+Passing repeats still do not establish the historical extra-commit cause.
 
 Historical JVM aggregate comparisons copy the complete current metric fixture dependencies,
 including the counter-only reporter, into the immutable previous runtime. Omitting that

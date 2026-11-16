@@ -102,7 +102,9 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.failure-regression-selection.outputs.matrix) }}
     env:
-      JAVA_TOOL_OPTIONS: '-XX:ActiveProcessorCount=4 -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m -XX:+UseSerialGC'
+      JAVA_TOOL_OPTIONS: >-
+        -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m
+        ${{ matrix.jdk == '11' && '-XX:+UseSerialGC' || '' }}
       SF_KAFKA_INTEGRATION: 'true'
     steps:
       - uses: actions/checkout@v6
@@ -133,6 +135,19 @@ jobs:
           PROFILES: ${{ matrix.profiles }}
           MODULE: ${{ matrix.module }}
         run: python3 bin/ci-maven-dependencies.py --profile "$PROFILES" --projects "$MODULE" --also-make
+      - name: Record the historical JDK17 collector configuration
+        if: matrix.suite == 'kafka' && matrix.jdk == '17'
+        run: |
+          mkdir -p "$RUNNER_TEMP/failure-regressions"
+          java -Xmx1g -XX:+PrintCommandLineFlags -version \
+            > "$RUNNER_TEMP/failure-regressions/jvm-flags.log" 2>&1
+          cat "$RUNNER_TEMP/failure-regressions/jvm-flags.log"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          flags = (Path(os.environ['RUNNER_TEMP']) / 'failure-regressions/jvm-flags.log').read_text()
+          assert '-XX:+UseG1GC' in flags and '-XX:+UseSerialGC' not in flags, flags
+          PY
       - name: Check canonical timing, physical state and worker cleanup regressions
         if: matrix.suite == 'canonical' || matrix.suite == 'kafka'
         env:
