@@ -1735,3 +1735,31 @@ available. Diagnostic extraction errors remain visible alongside the original fa
 Only failed fixture flat logs/metadata are uploaded; runtime tables and checkpoints are
 excluded and scoped runtime data is removed after evidence upload. Passing repetitions
 cannot establish the historical root cause.
+
+
+### Original mixed-workload Kafka diagnostic
+
+`diag/kafka-original-mixed-20261116` uses the original initial coexecuting classes
+from archived job132632169593: KafkaPipelineFailure, OrdinaryRegularJoin,
+ManagedUdfTimestampKey and GlobalHiddenExtrema. The prior original-runtime
+four-Kafka-class probe passed48 invocations, but used a different class mix.
+This diagnostic reuses its verified three-library debug artifact from43932231295;
+production, data, providers, assertions and all neighboring test bodies remain unchanged.
+
+Four forks start the original classes together. The observer requires all four class
+starts within five seconds, waits for the Kafka class’s complete four-provider XML,
+then stops only its owned Maven/worker process group. The remainder of the long
+neighboring classes contributes no additional information about an already-completed
+Kafka failure boundary, so it is deliberately canceled. Completed reports are retained
+before cancellation; incomplete neighbor remainders are explicitly unqualified.
+A successful diagnostic means four Kafka providers completed with no failure/error/skip
+under the initialized original class mix. This is not a complete shard or merge gate,
+and passing repeats do not establish the historical cause.
+
+The observer has a fifteen-minute bound and fails if Maven exits without complete Kafka
+XML, a provider is missing/skipped, or the original class mix is not established.
+A released-JUnit/Surefire local control uses four actual forked JVMs and long-running
+neighbors to check early process cleanup, successful target results and preservation of
+a deliberate target failure. Reused native inputs retain the original debug recipe,
+Flink1.18, pinned JDK17/G1 and original tier-1/code-cache/heap settings. Owned test
+containers and scoped fixture/runtime data are removed after evidence upload.
