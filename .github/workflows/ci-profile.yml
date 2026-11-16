@@ -1,6 +1,7 @@
 name: CI startup profile
 run-name: >-
-  ${{ inputs.history == 'original-prefix' && 'Historical Hudi Q10 with original query history'
+  ${{ inputs.runs == '1' && inputs.warmups == '0' && 'Hudi row-observation control'
+      || inputs.history == 'original-prefix' && 'Historical Hudi Q10 with original query history'
       || 'Historical Hudi Q10 correctness reproduction' }}
 
 on:
@@ -14,6 +15,16 @@ on:
         type: choice
         options: [isolated, original-prefix]
         default: isolated
+      runs:
+        description: 'Timed trials: 1 validates observations; 3 preserves original reproduction'
+        type: choice
+        options: ['1', '3']
+        default: '3'
+      warmups:
+        description: 'Warmups: 0 for an observation control; 1 for original reproduction'
+        type: choice
+        options: ['0', '1']
+        default: '1'
       checkpoint_ms:
         description: 'Checkpoint frequency for the correctness diagnostic'
         type: choice
@@ -39,8 +50,8 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       SF_HUDI_BENCH: 'true'
       SF_ROWS: '2000000'
-      SF_WARMUP: '1'
-      SF_RUNS: '3'
+      SF_WARMUP: ${{ inputs.warmups }}
+      SF_RUNS: ${{ inputs.runs }}
       SF_HUDI_BACKENDS: rocksdb
       SF_HUDI_MINIBATCHES: 'false'
       SF_MATRIX_QUERIES: ${{ inputs.history == 'original-prefix' && 'q0,q1,q2,q3,q4,q7,q8,q9,q10' || 'q10' }}
@@ -215,9 +226,10 @@ jobs:
           assert report['status'] == 'passed', report
           assert report['rows'] == 2000000 and report['input_bids'] == 1840000
           assert report['checkpoint_ms'] == int(os.environ['SF_HUDI_CHECKPOINT_MS'])
+          assert report['runs'] == int(os.environ['SF_RUNS']) and report['warmups'] == int(os.environ['SF_WARMUP'])
           observed = [row for row in report['observations'] if 'engine' in row]
           queries = ['q0', 'q1', 'q2', 'q3', 'q4', 'q8', 'q9', 'q10'] if ',' in os.environ['SF_MATRIX_QUERIES'] else ['q10']
-          expected = {(query, engine, trial) for query in queries for engine in ('stock', 'previous', 'native') for trial in range(3)}
+          expected = {(query, engine, trial) for query in queries for engine in ('stock', 'previous', 'native') for trial in range(int(os.environ['SF_RUNS']))}
           assert len(observed) == len(expected)
           assert {(row['query'], row['engine'], row['trial']) for row in observed} == expected
           for row in observed:
@@ -239,7 +251,7 @@ jobs:
                              and value['operator_name'].startswith('Source:'))
                   read_replayed = any(vertex['attempt'] > 0 for vertex in row['read_execution'])
                   assert (read >= 1840000 if read_replayed else read == 1840000), ('stock readback source count', row)
-          print('Selected query history and all nine Q10 identities passed; passing repeats do not establish the historical cause.')
+          print(f'{len(expected)} selected timed identities passed; passing controls do not establish the historical cause.')
           PYCODE
       - uses: actions/upload-artifact@v4
         if: always()

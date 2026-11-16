@@ -1787,3 +1787,9 @@ Cumulative operator counts can include work replayed by failed attempts. The dia
 requires exact Q10 counts when the corresponding execution graph has attempt0 throughout;
 when an attempt restarted, it retains replay-inclusive totals and requires at least the
 validated output cardinality. Full row/value assertions remain unchanged in every case.
+
+Select `runs=1,warmups=0,history=isolated` to validate the observer on one unchanged Q10
+invocation per engine before investing in a long history replay. This cold three-identity
+control makes no performance claim and does not reproduce the preceding query history.
+The defaults remain the original one warmup and three trials for full reproduction;
+the result guard requires every identity and records the actual trial/warmup configuration.
