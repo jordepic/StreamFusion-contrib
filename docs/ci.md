@@ -1748,3 +1748,17 @@ checks both library byte hashes before staging them. It does not rebuild or uplo
 another copy of those libraries. Only the workflow, this note and the failure-only
 benchmark observations may differ from source `5cf84474a`; production inputs and
 the shared SQL, event-generation and multiset-comparison fixtures stay identical.
+
+The isolated `diag/hudi-checkpoints-20261116` diagnostic keeps the original
+production/native source, SQL, event corpus,2M rows, parallelism4, RocksDB,
+object reuse and full-value assertions. It parameterizes only checkpoint
+frequency (default1000ms, stress100ms) and records the actual write/readback
+execution vertices, attempt numbers and final I/O record counts outside the
+measured region. Together with failure-only Parquet and commit counts, this
+separates compute output loss, uncommitted physical output and readback loss.
+Task I/O counters describe external task edges; Arrow edges count batches,
+and fully chained tasks can have zero external records. Interpret these counts
+alongside the recorded vertex topology and physical table counts.
+It reuses original release producer43884142940 and makes no performance claim
+for the different checkpoint configuration. Passing prior history replays did
+not establish the historical missing-row cause.

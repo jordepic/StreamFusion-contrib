@@ -14,6 +14,11 @@ on:
         type: choice
         options: [isolated, original-prefix]
         default: isolated
+      checkpoint_ms:
+        description: 'Checkpoint frequency for the correctness diagnostic'
+        type: choice
+        options: ['1000', '100']
+        default: '1000'
 
 permissions:
   contents: read
@@ -40,6 +45,7 @@ jobs:
       SF_HUDI_MINIBATCHES: 'false'
       SF_MATRIX_QUERIES: ${{ inputs.history == 'original-prefix' && 'q0,q1,q2,q3,q4,q7,q8,q9,q10' || 'q10' }}
       SF_OBJECT_REUSE: 'true'
+      SF_HUDI_CHECKPOINT_MS: ${{ inputs.checkpoint_ms || '1000' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -73,6 +79,7 @@ jobs:
                         native_tree=native, fixture_sha256=hashes,
                         historical_job=132617478396, performance_claim=False,
                         selected_queries=os.environ['SF_MATRIX_QUERIES'])
+          result['checkpoint_ms'] = int(os.environ['SF_HUDI_CHECKPOINT_MS'])
           output = Path(os.environ['RUNNER_TEMP']) / 'hudi-historical/provenance.json'
           output.write_text(json.dumps(result, indent=2) + '\n')
           PYCODE
@@ -206,6 +213,7 @@ jobs:
           report = json.loads((Path(os.environ['RUNNER_TEMP']) / 'hudi-historical/result.json').read_text())
           assert report['status'] == 'passed', report
           assert report['rows'] == 2000000 and report['input_bids'] == 1840000
+          assert report['checkpoint_ms'] == int(os.environ['SF_HUDI_CHECKPOINT_MS'])
           observed = [row for row in report['observations'] if 'engine' in row]
           queries = ['q0', 'q1', 'q2', 'q3', 'q4', 'q8', 'q9', 'q10'] if ',' in os.environ['SF_MATRIX_QUERIES'] else ['q10']
           expected = {(query, engine, trial) for query in queries for engine in ('stock', 'previous', 'native') for trial in range(3)}
@@ -214,6 +222,10 @@ jobs:
           for row in observed:
               assert row['backend'] == 'rocksdb' and not row['mini_batch']
               assert row['validation'] == 'full-value multiset'
+              for boundary in ('write_execution', 'read_execution'):
+                  assert row[boundary] and all('diagnostic_error' not in vertex for vertex in row[boundary]), row
+                  assert any('records_in' in vertex and 'records_out' in vertex for vertex in row[boundary]), row
+              assert all(vertex.get('checkpoint_interval_ms') == report['checkpoint_ms'] for vertex in row['write_execution']), row
               if row['query'] == 'q10':
                   assert row['output_rows'] == 1840000
           print('Selected query history and all nine Q10 identities passed; passing repeats do not establish the historical cause.')

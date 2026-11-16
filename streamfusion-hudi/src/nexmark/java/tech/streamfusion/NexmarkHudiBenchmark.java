@@ -28,6 +28,8 @@ import tech.streamfusion.planner.NativePlanner;
 @EnabledIfEnvironmentVariable(named = "SF_HUDI_BENCH", matches = "true")
 class NexmarkHudiBenchmark {
   private static final int PARALLELISM = 4;
+  private static final long CHECKPOINT_MS =
+      Long.parseLong(System.getenv().getOrDefault("SF_HUDI_CHECKPOINT_MS", "1000"));
   private static final long ROWS =
       Long.parseLong(System.getenv().getOrDefault("SF_ROWS", "2000000"));
   private static final int WARMUPS =
@@ -147,6 +149,8 @@ class NexmarkHudiBenchmark {
                     observation.put("wall_milliseconds", result.wallMilliseconds);
                     observation.put("started_at_utc", result.startedAt);
                     observation.put("output_rows", result.outputRows);
+                    observation.put("write_execution", result.writeExecution);
+                    observation.put("read_execution", result.readExecution);
                     observation.put("sink_partitions", result.partitions);
                     observation.put(
                         "validation",
@@ -180,6 +184,8 @@ class NexmarkHudiBenchmark {
                     details.put("mini_batch", miniBatch);
                     details.put("trial", trial);
                     details.put("readback_rows", result.outputRows);
+                    details.put("write_execution", result.writeExecution);
+                    details.put("read_execution", result.readExecution);
                     details.put("parquet", parquetRows(result.target));
                     var conf = new Configuration();
                     conf.setString("path", result.target.toUri().toString());
@@ -269,7 +275,7 @@ class NexmarkHudiBenchmark {
     memory.set(TaskManagerOptions.TASK_OFF_HEAP_MEMORY, MemorySize.ofMebiBytes(1024));
     var env = StreamExecutionEnvironment.getExecutionEnvironment(memory);
     env.setParallelism(parallelism);
-    if (checkpoints) env.enableCheckpointing(1000);
+    if (checkpoints) env.enableCheckpointing(CHECKPOINT_MS);
     if (!"false".equals(System.getenv("SF_OBJECT_REUSE"))) env.getConfig().enableObjectReuse();
     var tables = StreamTableEnvironment.create(env);
     tables.getConfig().setLocalTimeZone(ZoneId.of("UTC"));
@@ -430,8 +436,10 @@ class NexmarkHudiBenchmark {
       double wallMilliseconds;
       var startedAt = java.time.Instant.now();
       long start = System.nanoTime();
+      org.apache.flink.table.api.TableResult inserted;
       try {
-        tables.executeSql(insert).await();
+        inserted = tables.executeSql(insert);
+        inserted.await();
         awaitCommits(target);
         milliseconds = (System.nanoTime() - start) / 1e6;
         wallMilliseconds =
@@ -452,6 +460,7 @@ class NexmarkHudiBenchmark {
       System.out.printf(
           "[hudi-nexmark] finished %s engine=%s %.3f ms; validating output%n",
           query.label, engine, milliseconds);
+      var writeExecution = executionCounts(inserted.getJobClient().orElseThrow());
       if (verifyBackend) {
         assertTrue(opened.get(), "q4 did not open RocksDB for " + engine);
         stateChecks.add(
@@ -473,15 +482,14 @@ class NexmarkHudiBenchmark {
         long processingTimeCounts = 0;
         long outputRows = 0;
         var partitions = new java.util.HashSet<Integer>();
-        try (var rows =
-            reader
+        var readback = reader
                 .executeSql(
                     "SELECT "
                         + columns.stream()
                             .map(NexmarkHudiBenchmark::quote)
                             .collect(Collectors.joining(","))
-                        + ",sf_partition FROM sink")
-                .collect()) {
+                        + ",sf_partition FROM sink");
+        try (var rows = readback.collect()) {
           while (rows.hasNext()) {
             var row = rows.next();
             output.add(row.toString());
@@ -496,6 +504,7 @@ class NexmarkHudiBenchmark {
             }
           }
         }
+        var readExecution = executionCounts(readback.getJobClient().orElseThrow());
         if (query.label.equals("q12")) assertTrue(processingTimeCounts <= inputBids);
         if (query.label.equals("q0")) {
           assertEquals(
@@ -514,7 +523,9 @@ class NexmarkHudiBenchmark {
             output,
             target,
             outputRows,
-            partitions);
+            partitions,
+            writeExecution,
+            readExecution);
       } finally {
         if (!success) {
           output.close();
@@ -529,6 +540,54 @@ class NexmarkHudiBenchmark {
       }
       throw failure;
     }
+  }
+
+  private static List<Map<String, Object>> executionCounts(
+      org.apache.flink.core.execution.JobClient client) {
+    var counts = new ArrayList<Map<String, Object>>();
+    try {
+      String completionFailure = null;
+      try {
+        client.getJobExecutionResult().get(30, java.util.concurrent.TimeUnit.SECONDS);
+      } catch (Exception failure) {
+        if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
+        completionFailure = failure.toString();
+      }
+      var field = org.apache.flink.runtime.minicluster.MiniClusterJobClient.class
+          .getDeclaredField("miniCluster");
+      field.setAccessible(true);
+      var cluster = (org.apache.flink.runtime.minicluster.MiniCluster) field.get(client);
+      var graph = cluster.getExecutionGraph(client.getJobID())
+          .get(30, java.util.concurrent.TimeUnit.SECONDS);
+      for (var vertex : graph.getAllVertices().values()) {
+        for (var task : vertex.getTaskVertices()) {
+          var attempt = task.getCurrentExecutionAttempt();
+          var metrics = attempt.getIOMetrics();
+          var details = new LinkedHashMap<String, Object>();
+          details.put("job_id", client.getJobID().toString());
+          details.put("job_state", graph.getState().toString());
+          details.put("vertex", vertex.getName());
+          details.put("subtask", task.getParallelSubtaskIndex());
+          details.put("attempt", attempt.getAttemptNumber());
+          details.put("task_state", attempt.getState().toString());
+          if (completionFailure != null) details.put("completion_failure", completionFailure);
+          var checkpoints = graph.getCheckpointCoordinatorConfiguration();
+          if (checkpoints != null)
+            details.put("checkpoint_interval_ms", checkpoints.getCheckpointInterval());
+          var stats = graph.getCheckpointStatsSnapshot();
+          if (stats != null)
+            details.put("completed_checkpoints", stats.getCounts().getNumberOfCompletedCheckpoints());
+          if (metrics != null) {
+            details.put("records_in", metrics.getNumRecordsIn());
+            details.put("records_out", metrics.getNumRecordsOut());
+          }
+          counts.add(details);
+        }
+      }
+    } catch (Exception failure) {
+      counts.add(Map.of("diagnostic_error", failure.toString()));
+    }
+    return counts;
   }
 
   private static boolean databaseOpened(Path directory) {
@@ -666,7 +725,7 @@ class NexmarkHudiBenchmark {
     data.put("parallelism", PARALLELISM);
     data.put("source_partitions", 4);
     data.put("sink_partition_modulus", 4);
-    data.put("checkpoint_ms", 1000);
+    data.put("checkpoint_ms", CHECKPOINT_MS);
     data.put("warmups", WARMUPS);
     data.put("runs", RUNS);
     data.put("object_reuse", !"false".equals(System.getenv("SF_OBJECT_REUSE")));
@@ -702,6 +761,8 @@ class NexmarkHudiBenchmark {
     final Path target;
     final long outputRows;
     final List<Integer> partitions;
+    final List<Map<String, Object>> writeExecution;
+    final List<Map<String, Object>> readExecution;
 
     Result(
         double milliseconds,
@@ -710,7 +771,9 @@ class NexmarkHudiBenchmark {
         SortedOutput rows,
         Path target,
         long outputRows,
-        java.util.Set<Integer> partitions) {
+        java.util.Set<Integer> partitions,
+        List<Map<String, Object>> writeExecution,
+        List<Map<String, Object>> readExecution) {
       this.milliseconds = milliseconds;
       this.wallMilliseconds = wallMilliseconds;
       this.startedAt = startedAt;
@@ -718,6 +781,8 @@ class NexmarkHudiBenchmark {
       this.target = target;
       this.outputRows = outputRows;
       this.partitions = partitions.stream().sorted().collect(Collectors.toList());
+      this.writeExecution = writeExecution;
+      this.readExecution = readExecution;
     }
 
     public void close() throws Exception {
