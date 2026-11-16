@@ -15,7 +15,6 @@ import java.util.stream.Collectors;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.TaskManagerOptions;
-import org.apache.flink.runtime.testutils.HudiRecordMetrics;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.junit.jupiter.api.AfterEach;
@@ -38,7 +37,7 @@ class NexmarkHudiBenchmark {
   private static final int RUNS = Integer.parseInt(System.getenv().getOrDefault("SF_RUNS", "3"));
   private static final ObjectMapper JSON = new ObjectMapper();
   @TempDir Path temporary;
-  private final HudiRecordMetrics recordMetrics = new HudiRecordMetrics();
+  private final HudiRecordMetrics recordMetrics = HudiRecordMetrics.shared();
   private int sequence;
   private long inputBids;
   private String status = "running";
@@ -281,9 +280,10 @@ class NexmarkHudiBenchmark {
 
   private StreamTableEnvironment environment(
       String engine, String backend, boolean miniBatch, int parallelism, boolean checkpoints) {
-    var memory = recordMetrics.configure(new Configuration());
+    var memory = new Configuration();
     memory.set(TaskManagerOptions.TASK_OFF_HEAP_MEMORY, MemorySize.ofMebiBytes(1024));
     var env = StreamExecutionEnvironment.getExecutionEnvironment(memory);
+    recordMetrics.requireAttached();
     env.setParallelism(parallelism);
     if (checkpoints) env.enableCheckpointing(CHECKPOINT_MS);
     if (!"false".equals(System.getenv("SF_OBJECT_REUSE"))) env.getConfig().enableObjectReuse();

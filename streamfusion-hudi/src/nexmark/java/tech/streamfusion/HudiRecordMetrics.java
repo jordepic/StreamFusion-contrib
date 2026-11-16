@@ -1,11 +1,13 @@
-package org.apache.flink.runtime.testutils;
+package tech.streamfusion;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.apache.flink.configuration.Configuration;
+import java.util.Properties;
+import org.apache.flink.metrics.reporter.MetricReporter;
+import org.apache.flink.metrics.reporter.MetricReporterFactory;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.Meter;
 import org.apache.flink.metrics.Metric;
@@ -13,16 +15,28 @@ import org.apache.flink.metrics.MetricConfig;
 import org.apache.flink.metrics.MetricGroup;
 
 /** Diagnostic counts at operator boundaries, retaining values after task and cluster teardown. */
-public final class HudiRecordMetrics extends InMemoryReporter {
+public final class HudiRecordMetrics implements MetricReporter {
+  private static final HudiRecordMetrics SHARED = new HudiRecordMetrics();
+  private volatile boolean attached;
   private final Map<String, Reading> live = new HashMap<>();
   private final Map<String, Map<String, Object>> completed = new HashMap<>();
 
-  public HudiRecordMetrics() {
-    super(true);
+  private HudiRecordMetrics() {}
+
+  public static HudiRecordMetrics shared() {
+    return SHARED;
   }
 
-  public Configuration configure(Configuration configuration) {
-    return addToConfiguration(configuration);
+  public void requireAttached() {
+    if (!attached) throw new IllegalStateException("Hudi diagnostic reporter is not attached to the test cluster");
+  }
+
+  public static final class Factory implements MetricReporterFactory {
+    @Override
+    public MetricReporter createMetricReporter(Properties properties) {
+      SHARED.attached = true;
+      return SHARED;
+    }
   }
 
   public synchronized List<Map<String, Object>> snapshot(String job) {
@@ -36,7 +50,6 @@ public final class HudiRecordMetrics extends InMemoryReporter {
   }
 
   public synchronized void dispose() {
-    super.close();
     live.clear();
     completed.clear();
   }
@@ -44,7 +57,7 @@ public final class HudiRecordMetrics extends InMemoryReporter {
   @Override
   public void open(MetricConfig configuration) {}
 
-  // Clusters close between jobs; the benchmark owns registration until dispose().
+  // Retain final counts until the benchmark has reported them.
   @Override
   public synchronized void close() {
     live.forEach((key, reading) -> completed.put(key, reading.snapshot()));

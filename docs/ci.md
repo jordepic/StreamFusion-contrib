@@ -1779,9 +1779,18 @@ adding per-row callbacks. Diagnostic timings are not performance evidence.
 A released-Flink1.18.1/Hudi1.2.1 local control wrote1,000 rows through four stock Hudi
 subtasks. Operator input, cumulative Hudi writes and physical Parquet footer counts each
 reported1,000; a second independent cluster reported its own seven input rows while retaining
-the first job’s values. The reporter uses the released in-memory factory registration and
-disposes that registration at benchmark teardown. This validates the observation method,
-not the historical row-loss cause.
+the first job’s values. That standalone control did not cover the benchmark's shared
+MiniCluster. The first hosted three-identity control passed result parity but failed observation
+validation because the shared cluster ignores per-job reporter configuration. The diagnostic
+now installs its optional reporter factory when that shared cluster is constructed, through
+Flink's released factory SPI in the Hudi-only benchmark resources. A JVM property selects
+that factory; ordinary tests retain their existing cluster configuration. The observer fails
+immediately when it is not attached and clears retained readings after reporting. Shared
+cluster lifecycle, memory, slots, restart policy and all result assertions remain unchanged.
+The corrected shared-cluster JUnit control passes: 1,000 sink-input, cumulative-writer and
+physical Parquet rows, then seven rows in another job in the same MiniCluster, verified through
+the actual job clients. Earlier counts survive the second job; an unattached observer fails
+immediately. These controls validate observation wiring, not the historical row-loss cause.
 
 Cumulative operator counts can include work replayed by failed attempts. The diagnostic
 requires exact Q10 counts when the corresponding execution graph has attempt0 throughout;

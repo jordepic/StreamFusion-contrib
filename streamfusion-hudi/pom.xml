@@ -121,11 +121,17 @@
                                 <phase>generate-test-sources</phase>
                                 <goals>
                                     <goal>add-test-source</goal>
+                                    <goal>add-test-resource</goal>
                                 </goals>
                                 <configuration>
                                     <sources>
                                         <source>${project.basedir}/src/nexmark/java</source>
                                     </sources>
+                                    <resources>
+                                        <resource>
+                                            <directory>${project.basedir}/src/nexmark/resources</directory>
+                                        </resource>
+                                    </resources>
                                 </configuration>
                             </execution>
                         </executions>

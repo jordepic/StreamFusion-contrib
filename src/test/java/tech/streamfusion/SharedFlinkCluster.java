@@ -38,6 +38,9 @@ public final class SharedFlinkCluster
     // test that needs a different memory setup must build its own local environment
     // (FlinkMemoryAccountingTest does).
     Configuration config = new Configuration();
+    String reporterFactory = System.getProperty("sf.test.metrics.factory");
+    if (reporterFactory != null)
+      config.setString("metrics.reporter.diagnostic.factory.class", reporterFactory);
     String managedMemory = System.getenv("SF_BENCH_MANAGED_MEMORY");
     if (managedMemory != null) {
       config.set(TaskManagerOptions.MANAGED_MEMORY_SIZE, MemorySize.parse(managedMemory));
