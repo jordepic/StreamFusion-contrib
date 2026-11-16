@@ -37,7 +37,7 @@ import org.testcontainers.utility.DockerImageName;
 class CanonicalKafkaSinkJobTest {
   private static KafkaContainer kafka;
 
-  @TempDir(cleanup = CleanupMode.ON_SUCCESS)
+  @TempDir(cleanup = CleanupMode.NEVER)
   Path directory;
 
   boolean kafkaInput() {

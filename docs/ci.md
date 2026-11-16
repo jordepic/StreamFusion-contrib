@@ -2023,3 +2023,12 @@ retain every measured pair, invocation counts, source references and artifact
 checksums. Existing JDK11 tuning and G1-only metadata archive generation remain
 separate decisions. The [rejected investigation](https://github.com/jordepic/StreamFusion-contrib/blob/perf/ci-reduction-20261115/.claude/wontdos/ci-jdk17-serial-gc.md)
 records when to revisit this question.
+
+The isolated `diag/kafka-checkpoints-20261116` probe retains four original smoke
+providers under Flink1.18/JDK17/default G1 and four forks. This includes the exact
+historical ordinary=false (compiled plan), nativeFirst=false, incrementing task-loss parameter. It changes
+only diagnostic fixture retention to NEVER so passing checkpoint snapshots can
+be collected, then removes all fixtures after upload. The summary retains before
+and after-fault counts, effective interval, restore IDs and actual native plans.
+Every original external-row assertion remains. This is a four-case diagnostic,
+not full-provider qualification or a performance comparison.
