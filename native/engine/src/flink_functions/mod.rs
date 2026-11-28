@@ -35,6 +35,7 @@ pub(crate) mod rpad;
 pub(crate) mod split;
 pub(crate) mod split_index;
 pub(crate) mod string_comparison;
+mod string_transform;
 pub(crate) mod substring;
 pub(crate) mod to_date;
 
@@ -136,8 +137,11 @@ pub(crate) fn function(op: i64, arity: usize) -> Option<ScalarUDF> {
         scalar_op::ENDS_WITH => datafusion::functions::string::ends_with().as_ref().clone(),
         scalar_op::BINARY_STARTS_WITH => binary_boundary::starts_with(),
         scalar_op::BINARY_ENDS_WITH => binary_boundary::ends_with(),
-        scalar_op::STRPOS => datafusion::functions::unicode::strpos().as_ref().clone(),
-        scalar_op::LOCATE => ScalarUDF::new_from_impl(locate::FlinkLocate::new()),
+        scalar_op::STRPOS => ScalarUDF::new_from_impl(locate::FlinkLocate::new(false)),
+        scalar_op::LOCATE => ScalarUDF::new_from_impl(locate::FlinkLocate::new(true)),
+        scalar_op::UPPER => string_transform::case_function(true),
+        scalar_op::LOWER => string_transform::case_function(false),
+        scalar_op::REVERSE => string_transform::reverse_function(),
         scalar_op::BIN => udf(
             "flink_bin",
             vec![DataType::Int64],
@@ -379,14 +383,23 @@ fn udf(
     output: DataType,
     kernel: fn(&[ArrayRef]) -> Result<ArrayRef>,
 ) -> ScalarUDF {
+    udf_with_hints(name, inputs, output, kernel, vec![])
+}
+
+fn udf_with_hints(
+    name: &str,
+    inputs: Vec<DataType>,
+    output: DataType,
+    kernel: fn(&[ArrayRef]) -> Result<ArrayRef>,
+    hints: Vec<datafusion::logical_expr::function::Hint>,
+) -> ScalarUDF {
     datafusion::logical_expr::create_udf(
         name,
         inputs,
         output,
         Volatility::Immutable,
         Arc::new(datafusion::functions::utils::make_scalar_function(
-            kernel,
-            vec![],
+            kernel, hints,
         )),
     )
 }

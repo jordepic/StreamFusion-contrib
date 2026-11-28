@@ -999,11 +999,13 @@ pub(crate) fn build_call(
             .call(args);
         }
         scalar_op::POSITION => {
-            // POSITION(sub IN s): operands arrive [sub, s]; strpos takes (string, substring).
+            // POSITION(sub IN s) supplies the needle first.
             let mut a = args.into_iter();
             let substring = a.next().expect("position substring");
             let string = a.next().expect("position string");
-            return datafusion::functions::unicode::expr_fn::strpos(string, substring);
+            return crate::flink_functions::function(scalar_op::STRPOS, 2)
+                .expect("position function")
+                .call(vec![string, substring]);
         }
         _ => {
             let mut it = args.into_iter();
@@ -1047,10 +1049,6 @@ pub(crate) fn build_call(
                 scalar_op::FLOOR_FLOAT => datafusion::functions::math::expr_fn::floor(next()),
                 scalar_op::CEIL_FLOAT => datafusion::functions::math::expr_fn::ceil(next()),
                 scalar_op::REPEAT => datafusion::functions::string::expr_fn::repeat(next(), next()),
-                // Opt-in (allowIncompatible) functions: native results may differ from the host. The Java
-                // encoder admits these only under the per-function flag — see NativeConfig.
-                scalar_op::UPPER => datafusion::functions::string::expr_fn::upper(next()),
-                scalar_op::LOWER => datafusion::functions::string::expr_fn::lower(next()),
                 scalar_op::POWER => datafusion::functions::math::expr_fn::power(next(), next()),
                 scalar_op::EXP => datafusion::functions::math::expr_fn::exp(next()),
                 scalar_op::LN => datafusion::functions::math::expr_fn::ln(next()),
@@ -1068,13 +1066,6 @@ pub(crate) fn build_call(
                         Box::new(next()),
                         None,
                         false,
-                    ))
-                }
-                // REVERSE yields a Utf8View (like substr); cast back to Utf8 for the JVM converter.
-                scalar_op::REVERSE => {
-                    datafusion::prelude::Expr::Cast(datafusion::logical_expr::Cast::new(
-                        Box::new(datafusion::functions::unicode::expr_fn::reverse(next())),
-                        DataType::Utf8,
                     ))
                 }
                 other => panic!("unsupported expression op: {other}"),

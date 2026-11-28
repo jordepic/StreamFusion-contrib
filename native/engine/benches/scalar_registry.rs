@@ -173,6 +173,9 @@ fn fixtures(rows: usize, nulls: bool, unicode: bool) -> Vec<(i64, Vec<ColumnarVa
     }
     let string_lists = array(strings.finish(), rows);
     let mut cases = vec![
+        (50, vec![string(&text)]),
+        (51, vec![string(&text)]),
+        (59, vec![string(&text)]),
         (
             65,
             vec![array(

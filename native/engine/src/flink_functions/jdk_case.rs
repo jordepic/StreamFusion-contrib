@@ -4,11 +4,12 @@ use std::sync::Arc;
 use word_break::WordBreak;
 
 use super::byte_string_text::{flink_char_width, utf8_view, TextColumn, TextValue};
+use super::string_transform::{ascii_case_copy, rebased_offsets};
 use arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, ListArray, ListBuilder, StringArray,
     StructArray, UInt16Builder,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion::common::{exec_datafusion_err, Result};
 use datafusion::logical_expr::{
@@ -379,7 +380,7 @@ fn ascii_case_values(
     let offsets = source.value_offsets();
     let start = offsets[0];
     let end = offsets[source.len()];
-    let mut values = source.value_data()[start as usize..end as usize].to_vec();
+    let mut values = ascii_case_copy(&source.value_data()[start as usize..end as usize], upper);
     let mut cached_units = 0;
     if let Some(cache) = cache {
         for (row, offsets) in offsets.windows(2).enumerate() {
@@ -392,26 +393,16 @@ fn ascii_case_values(
             }
             cached_units += units.len();
             for (byte, &unit) in bytes.iter_mut().zip(units) {
-                *byte = unit as u8;
+                let unit = unit as u8;
+                *byte = if upper {
+                    unit.to_ascii_uppercase()
+                } else {
+                    unit.to_ascii_lowercase()
+                };
             }
         }
     }
-    if upper {
-        values.make_ascii_uppercase();
-    } else {
-        values.make_ascii_lowercase();
-    }
-    let offsets = if start == 0 {
-        source.offsets().clone()
-    } else {
-        OffsetBuffer::new(
-            offsets
-                .iter()
-                .map(|offset| offset - start)
-                .collect::<Vec<_>>()
-                .into(),
-        )
-    };
+    let offsets = rebased_offsets(source);
     let caches = cache.map(|cache| {
         let mut output =
             ListBuilder::with_capacity(UInt16Builder::with_capacity(cached_units), source.len())
@@ -433,7 +424,8 @@ fn ascii_case_values(
         output.finish()
     });
     Some((
-        StringArray::new(offsets, values.into(), source.nulls().cloned()),
+        // SAFETY: only ASCII bytes were mapped or overwritten with ASCII cache values.
+        unsafe { StringArray::new_unchecked(offsets, values.into(), source.nulls().cloned()) },
         caches,
     ))
 }

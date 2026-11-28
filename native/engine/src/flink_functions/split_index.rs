@@ -4,7 +4,8 @@ use datafusion::common::{
     cast::{as_int32_array, as_string_array},
     exec_err, Result,
 };
-use datafusion::logical_expr::ScalarUDF;
+use datafusion::logical_expr::{function::Hint, ScalarUDF};
+use memchr::{memchr_iter, memmem};
 use std::sync::Arc;
 use streamfusion_bridge::string_cache::JavaStringCacheColumn;
 
@@ -57,13 +58,7 @@ pub(crate) fn integer_separator(args: [&ArrayRef; 3], caches: &[ArrayRef]) -> Op
         let delimiter = separator.value(row) as u8;
         let index = index.value(row) as usize;
         let token = if delimiter.is_ascii() {
-            let mut positions = memchr::memchr_iter(delimiter, value.as_bytes());
-            let start = if index == 0 {
-                Some(0)
-            } else {
-                positions.nth(index - 1).map(|position| position + 1)
-            };
-            start.map(|start| &value[start..positions.next().unwrap_or(value.len())])
+            nth_token(value, 1, memchr_iter(delimiter, value.as_bytes()), index)
         } else {
             value.split(char::from(delimiter)).nth(index)
         };
@@ -73,11 +68,12 @@ pub(crate) fn integer_separator(args: [&ArrayRef; 3], caches: &[ArrayRef]) -> Op
 }
 
 pub(crate) fn function() -> ScalarUDF {
-    super::udf(
+    super::udf_with_hints(
         "flink_split_index",
         vec![DataType::Utf8, DataType::Utf8, DataType::Int32],
         DataType::Utf8,
         split_index,
+        vec![Hint::Pad, Hint::AcceptsSingular],
     )
 }
 
@@ -88,34 +84,64 @@ fn split_index(args: &[ArrayRef]) -> Result<ArrayRef> {
     let input = as_string_array(input)?;
     let separator = as_string_array(separator)?;
     let index = as_int32_array(index)?;
-    let mut output = StringBuilder::with_capacity(input.len(), input.values().len());
-    for row in 0..input.len() {
-        if input.is_null(row)
-            || separator.is_null(row)
-            || index.is_null(row)
-            || index.value(row) < 0
-            || input.value(row).is_empty()
-        {
-            output.append_null();
-            continue;
-        }
-        let token = if separator.value(row).is_empty() {
-            input
-                .value(row)
-                .split(java_whitespace)
-                .nth(index.value(row) as usize)
-        } else {
-            input
-                .value(row)
-                .split(separator.value(row))
-                .nth(index.value(row) as usize)
+    let constant = (separator.len() == 1 && separator.is_valid(0))
+        .then(|| separator.value(0))
+        .filter(|separator| separator.len() > 1)
+        .map(|separator| memmem::Finder::new(separator.as_bytes()));
+    let offsets = input.value_offsets();
+    let mut output =
+        StringBuilder::with_capacity(input.len(), (offsets[input.len()] - offsets[0]) as usize);
+    for (row, (value, index)) in input.iter().zip(index).enumerate() {
+        let delimiter_row = if separator.len() == 1 { 0 } else { row };
+        let token = match (value, index) {
+            (Some(value), Some(index))
+                if !value.is_empty() && index >= 0 && separator.is_valid(delimiter_row) =>
+            {
+                let index = index as usize;
+                let delimiter = separator.value(delimiter_row);
+                match delimiter.as_bytes() {
+                    [] => value.split(java_whitespace).nth(index),
+                    [byte] => nth_token(value, 1, memchr_iter(*byte, value.as_bytes()), index),
+                    _ if constant.is_none() && value.len() < 64 => {
+                        value.split(delimiter).nth(index)
+                    }
+                    delimiter => {
+                        let finder;
+                        let finder = match &constant {
+                            Some(constant) => constant,
+                            None => {
+                                finder = memmem::Finder::new(delimiter);
+                                &finder
+                            }
+                        };
+                        nth_token(
+                            value,
+                            delimiter.len(),
+                            finder.find_iter(value.as_bytes()),
+                            index,
+                        )
+                    }
+                }
+            }
+            _ => None,
         };
-        match token {
-            Some(value) => output.append_value(value),
-            None => output.append_null(),
-        }
+        output.append_option(token);
     }
     Ok(Arc::new(output.finish()))
+}
+
+fn nth_token<'a>(
+    value: &'a str,
+    delimiter_width: usize,
+    mut matches: impl Iterator<Item = usize>,
+    index: usize,
+) -> Option<&'a str> {
+    let start = if index == 0 {
+        0
+    } else {
+        matches.nth(index - 1)? + delimiter_width
+    };
+    Some(&value[start..matches.next().unwrap_or(value.len())])
 }
 
 fn java_whitespace(ch: char) -> bool {
@@ -129,6 +155,25 @@ mod tests {
     use super::*;
     use arrow::array::{Int32Array, StringArray};
     use streamfusion_bridge::string_cache::string_cache_array;
+
+    #[test]
+    fn string_delimiters_preserve_empty_tokens_and_non_overlapping_matches() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("aaaaa"),
+            Some("界|x界|"),
+            Some("a\u{2000}\u{2000}b"),
+            Some("a\u{a0}b"),
+            Some(""),
+            None,
+        ]));
+        let separators = Arc::new(StringArray::from(vec!["aa", "界|", "", "", "aa", "aa"]));
+        let indices: ArrayRef = Arc::new(Int32Array::from(vec![2, 2, 1, 1, 0, 0]));
+        let result = split_index(&[input, separators, indices]).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &StringArray::from(vec![Some("a"), Some(""), Some(""), None, None, None])
+        );
+    }
 
     #[test]
     fn integer_delimiters_preserve_empty_tokens_latin1_nulls_and_slices() {

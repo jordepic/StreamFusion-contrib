@@ -121,6 +121,14 @@ impl<'a> TextColumn<'a> {
         }
     }
 
+    fn is_ascii(&self) -> bool {
+        match self {
+            Self::Utf8(text) => text.is_ascii(),
+            Self::Validated(text) => text.is_ascii(),
+            Self::Mixed(_) => false,
+        }
+    }
+
     pub(super) fn get(&self, row: usize) -> Option<TextValue<'_>> {
         match self {
             Self::Utf8(text) => text_at(text, row),
@@ -173,14 +181,24 @@ fn position(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
     let needles = TextColumn::new(needle)?;
     let haystacks = TextColumn::new(haystack)?;
+    let ascii = haystacks.is_ascii();
     Ok(Arc::new(Int32Array::from_iter((0..haystack.len()).map(
         |row| {
             let needle = needles.get(row)?;
             let haystack = haystacks.get(row)?;
             Some(match (needle, haystack) {
                 (TextValue::Utf8(needle), TextValue::Utf8(haystack)) => {
-                    memchr::memmem::find(haystack.as_bytes(), needle.as_bytes())
-                        .map_or(0, |index| haystack[..index].chars().count() as i32 + 1)
+                    super::locate::find_bytes(haystack.as_bytes(), needle.as_bytes(), ascii).map_or(
+                        0,
+                        |index| {
+                            let position = if ascii {
+                                index
+                            } else {
+                                haystack[..index].chars().count()
+                            };
+                            position as i32 + 1
+                        },
+                    )
                 }
                 (needle, haystack) => {
                     let needle = needle.as_bytes();

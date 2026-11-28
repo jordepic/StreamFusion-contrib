@@ -538,9 +538,9 @@ exhaustion. For an empty needle and positive occurrence, positive start returns 
 start returns the string's codepoint length plus 1, even for starts outside the string.
 Zero start still returns zero.
 
-Two-argument calls continue using DataFusion's Unicode position kernel. Extended forms use
-forward/reverse byte search at codepoint boundaries, preserving overlapping matches without
-allocating reversed strings. Built-in admission uses the resolved SQL operator; user functions
+Two-argument calls share the native Unicode position kernel with two-argument LOCATE.
+Extended forms use forward and reverse byte search at codepoint boundaries, preserving
+overlapping matches without allocating reversed strings. Built-in admission uses the resolved SQL operator; user functions
 named INSTR retain their own behavior. BIGINT start/occurrence arguments remain unsupported.
 Extended calls under AND/OR stay native only when a literal start excludes `INT_MIN` and a
 literal/default occurrence is positive; otherwise Flink retains row short-circuiting for errors.

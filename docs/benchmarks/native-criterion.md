@@ -47,6 +47,13 @@ all nine batch/null/Unicode fixture profiles without pretending UUID consumes th
 Direct Calc regressions separately cover zero-column pruning, repeated batches, empty and
 all-filtered batches, independent call sites and preserved changelog tags.
 
+The `scalar_functions` benchmark group `string_simd` invokes the production UTF-8 scalar
+registrations for `POSITION`, `LOCATE`, `INSTR`, `SPLIT_INDEX`, `LOWER`, `UPPER`, and
+`REVERSE`. It uses 4,096 prebuilt Arrow rows per evaluation with short ASCII, wider ASCII and
+nullable Unicode fixtures. It includes literal and column needles, forward and backward searches,
+matches and misses. Timing includes result allocation. For the measurements and kernel behavior,
+see [SIMD string kernels](../optimizations/simd-string-kernels.md).
+
 The scalar registry also exercises the production CARDINALITY and TYPEOF selections
 (167/168). TYPEOF receives an evaluated nullable collection and Flink's resolved string;
 it returns that string without inspecting the collection's values. Collection benchmarks

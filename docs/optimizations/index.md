@@ -63,6 +63,7 @@ Those measurements describe CI job counts and elapsed time, not SQL execution th
 - [Decimal Arrow reads](decimal-arrow-reads.md): reconstruct signed-long values directly while retaining wide-value and overflow contracts.
 - [Transfer Calc schemas once](calc-schema-once-c-data.md): cache immutable input and output schemas while retaining independent per-batch buffer ownership.
 - [Fuse exact string consumers](native-string-fusion.md): compare padding/overlay UTF-16 spans before encoding and replace verified ASCII characters directly in the final Arrow buffer.
+- [SIMD string kernels](simd-string-kernels.md) reuse substring finders and write ASCII case conversion and reversal directly into Arrow buffers.
 - [Preserve JDK UTF-8 decoding](jdk-utf8-decoding.md): share valid buffers and write replacement groups directly into Arrow.
 - [Format Boolean words in blocks](boolean-word-blocks.md): use bitmap-indexed ASCII blocks while preserving cast mode, character lengths and NULL validity.
 - [Shared-window state costs](shared-window-state.md): exact memory deltas, batched reservations and preserved accumulator state.

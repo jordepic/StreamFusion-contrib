@@ -2895,7 +2895,7 @@ final class RexExpression implements EncodedExpression {
       return true;
     }
     if ("POSITION".equals(functionName)) {
-      // POSITION(sub IN s) — operands [sub, s]; the native side calls strpos(s, sub).
+      // POSITION(sub IN s) sends the needle before the string.
       List<RexNode> args = call.getOperands();
       if (args.size() != 2) {
         return reject("POSITION requires 2 arguments (no FROM start)");

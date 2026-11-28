@@ -181,5 +181,118 @@ fn uuid_generation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, functions, uuid_generation);
+fn string_simd(c: &mut Criterion) {
+    for (shape, width, prefix, delimiter, null_every) in [
+        ("short", 12, "aBcD", "::", 0),
+        ("ascii", 256, "AbcDEF-09", "::", 0),
+        ("unicode_nulls", 256, "É中🙂AbC", "界|", 8),
+        ("long", 2048, "AbcDEF-09", "::", 0),
+    ] {
+        let prefix = prefix.repeat(width / prefix.len());
+        let values = [
+            format!("{prefix}{delimiter}Foo{delimiter}Bar"),
+            format!("{prefix}{delimiter}Foo"),
+            format!("{prefix}{delimiter}Other{delimiter}Foo"),
+            format!("{prefix}NoMatch"),
+        ];
+        let strings = array(StringArray::from_iter((0..ROWS).map(|row| {
+            (null_every == 0 || row % null_every != 0).then(|| values[row % values.len()].as_str())
+        })));
+        let needles = array(StringArray::from_iter_values(
+            (0..ROWS).map(|row| ["Foo", "Bar", "F", "X"][row % 4]),
+        ));
+        let int = |value| ColumnarValue::Scalar(ScalarValue::Int32(Some(value)));
+        let cases = [
+            ("position", 102, vec![strings.clone(), scalar_text("Foo")]),
+            (
+                "position_array",
+                102,
+                vec![strings.clone(), needles.clone()],
+            ),
+            (
+                "locate",
+                103,
+                vec![strings.clone(), needles.clone(), int(2)],
+            ),
+            (
+                "instr",
+                161,
+                vec![strings.clone(), scalar_text("Foo"), int(1), int(1)],
+            ),
+            (
+                "instr_reverse",
+                161,
+                vec![strings.clone(), needles, int(-1), int(1)],
+            ),
+            (
+                "split_index",
+                130,
+                vec![strings.clone(), scalar_text(delimiter), int(1)],
+            ),
+            (
+                "split_index_byte",
+                130,
+                vec![strings.clone(), scalar_text("-"), int(1)],
+            ),
+            (
+                "split_index_column",
+                130,
+                vec![
+                    strings.clone(),
+                    array(StringArray::from_iter_values(
+                        (0..ROWS).map(|row| [delimiter, "-", "::", ""][row % 4]),
+                    )),
+                    int(1),
+                ],
+            ),
+            ("lower", 51, vec![strings.clone()]),
+            ("upper", 50, vec![strings.clone()]),
+            ("reverse", 59, vec![strings.clone()]),
+        ];
+
+        let mut group = c.benchmark_group(format!("string_simd/{shape}"));
+        group.throughput(Throughput::Elements(ROWS as u64));
+        group.sample_size(20);
+        group.warm_up_time(Duration::from_millis(300));
+        group.measurement_time(Duration::from_secs(1));
+        for (name, op, args) in cases {
+            let udf = flink_scalar_function(op, args.len());
+            let fields: Vec<_> = args
+                .iter()
+                .map(|arg| Arc::new(Field::new("arg", arg.data_type(), true)))
+                .collect();
+            let scalars: Vec<_> = args
+                .iter()
+                .map(|arg| match arg {
+                    ColumnarValue::Scalar(scalar) => Some(scalar),
+                    _ => None,
+                })
+                .collect();
+            let field = udf
+                .return_field_from_args(datafusion::logical_expr::ReturnFieldArgs {
+                    arg_fields: &fields,
+                    scalar_arguments: &scalars,
+                })
+                .unwrap();
+            let options = Arc::new(ConfigOptions::new());
+            group.bench_function(name, |b| {
+                b.iter(|| {
+                    std::hint::black_box(
+                        udf.invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            arg_fields: fields.clone(),
+                            number_rows: ROWS,
+                            return_field: field.clone(),
+                            config_options: options.clone(),
+                        })
+                        .unwrap(),
+                    )
+                });
+            });
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(benches, functions, uuid_generation, string_simd);
 criterion_main!(benches);
